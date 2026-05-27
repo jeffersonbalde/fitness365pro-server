@@ -67,4 +67,20 @@ return [
         'app_id' => env('FACEBOOK_APP_ID', ''),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Firebase Admin SDK (Google sign-in token verification)
+    |--------------------------------------------------------------------------
+    |
+    | Production (DigitalOcean): set FIREBASE_CREDENTIALS_JSON or
+    | FIREBASE_CREDENTIALS_BASE64 on the API app — do not commit JSON files.
+    | Local dev: FIREBASE_CREDENTIALS=./firebase-service-account.json
+    |
+    */
+    'firebase' => [
+        'credentials_json' => env('FIREBASE_CREDENTIALS_JSON'),
+        'credentials_base64' => env('FIREBASE_CREDENTIALS_BASE64'),
+        'credentials_path' => env('FIREBASE_CREDENTIALS'),
+    ],
+
 ];

@@ -15,6 +15,7 @@
 *firebase-adminsdk*.json
 /firebase-service-account.json
 /firebase-credentials.json
+/firebase-credentials-oneline.txt
 /storage/firebase/*.json
 /node_modules
 /public/build
