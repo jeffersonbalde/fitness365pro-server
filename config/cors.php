@@ -1,5 +1,16 @@
 <?php
 
+$allowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://fitness365pro-wpwkq.ondigitalocean.app',
+];
+
+$frontendUrl = env('FRONTEND_URL');
+if (is_string($frontendUrl) && $frontendUrl !== '') {
+    $allowedOrigins[] = rtrim($frontendUrl, '/');
+}
+
 return [
 
     /*
@@ -29,20 +40,15 @@ return [
         'incidents/*',
         'reports/*',
         'analytics/*',
-        'population/*'
+        'population/*',
     ],
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => [
-        'http://localhost:5173',
-        'http://localhost:3000',
-        'https://dbest-client-cobe7.ondigitalocean.app',
-        'https://dbest-client-cobe7.ondigitalocean.app/',
-    ],
+    'allowed_origins' => $allowedOrigins,
 
     'allowed_origins_patterns' => [
-        '#^https://dbest-client-.*\.ondigitalocean\.app$#',
+        '#^https://[a-z0-9-]+\.ondigitalocean\.app$#',
     ],
 
     'allowed_headers' => ['*'],
@@ -55,7 +61,7 @@ return [
         'X-CSRF-TOKEN',
     ],
 
-    'max_age' => 86400, // 24 hours
+    'max_age' => 86400,
 
     'supports_credentials' => true,
 
