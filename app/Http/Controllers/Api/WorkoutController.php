@@ -536,11 +536,12 @@ class WorkoutController extends Controller
             ], 422);
         }
 
-        $limit = (int) $request->input('limit', 50);
+        $limit = min((int) $request->input('limit', 25), 100);
         $sort = (string) $request->input('sort', 'chronological');
         $scope = (string) $request->input('scope', 'all');
         $rankingEnabled = (bool) config('social.feed_ranking.enabled', true);
         $monitoringEnabled = (bool) config('social.feed_ranking.monitoring_enabled', true);
+        $hasAdminEventId = Schema::hasColumn((new WorkoutLog)->getTable(), 'admin_event_id');
 
         $followingIds = $scope === 'following'
             ? $viewer->following()->pluck('clients.id')
@@ -548,24 +549,26 @@ class WorkoutController extends Controller
         $followingLookup = array_fill_keys($followingIds->map(fn ($id) => (string) $id)->all(), true);
 
         $baseQuery = WorkoutLog::query()
-            ->where('status', 'completed')
-            ->whereHas('client', fn ($q) => $q->whereNull('deleted_at'))
+            ->where('workout_logs.status', 'completed')
+            ->join('clients', 'clients.id', '=', 'workout_logs.client_id')
+            ->whereNull('clients.deleted_at')
+            ->select('workout_logs.*')
             ->with(['client.profile'])
             ->when(
-                Schema::hasColumn((new WorkoutLog)->getTable(), 'admin_event_id'),
+                $hasAdminEventId,
                 fn ($q) => $q->with(['linkedAdminEvent:id,title']),
             )
             ->withCount(['likes', 'comments']);
 
         if ($scope === 'following') {
             $candidateClientIds = $followingIds->push($viewer->id)->unique()->values();
-            $baseQuery->whereIn('client_id', $candidateClientIds);
+            $baseQuery->whereIn('workout_logs.client_id', $candidateClientIds);
         }
 
         if ($sort === 'chronological' || !$rankingEnabled) {
             $workoutRows = $baseQuery
-                ->orderByDesc('workout_date')
-                ->orderByDesc('created_at')
+                ->orderByDesc('workout_logs.workout_date')
+                ->orderByDesc('workout_logs.created_at')
                 ->limit($limit)
                 ->get();
             $workouts = collect($this->serializeWorkouts($workoutRows, $viewer->id))->values();
@@ -588,8 +591,8 @@ class WorkoutController extends Controller
         }
 
         $workouts = $baseQuery
-            ->orderByDesc('workout_date')
-            ->orderByDesc('created_at')
+            ->orderByDesc('workout_logs.workout_date')
+            ->orderByDesc('workout_logs.created_at')
             ->limit(200)
             ->get();
 

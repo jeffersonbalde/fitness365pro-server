@@ -15,6 +15,27 @@ use Illuminate\Support\Facades\URL;
  */
 final class WorkoutJsonPresenter
 {
+    private static ?bool $hasAdminEventIdColumn = null;
+
+    private static ?bool $hasChallengeProgressColumn = null;
+
+    private static function hasAdminEventIdColumn(): bool
+    {
+        if (self::$hasAdminEventIdColumn === null) {
+            self::$hasAdminEventIdColumn = Schema::hasColumn((new WorkoutLog)->getTable(), 'admin_event_id');
+        }
+
+        return self::$hasAdminEventIdColumn;
+    }
+
+    private static function hasChallengeProgressColumn(): bool
+    {
+        if (self::$hasChallengeProgressColumn === null) {
+            self::$hasChallengeProgressColumn = Schema::hasColumn((new WorkoutLog)->getTable(), 'challenge_progress_approved_km');
+        }
+
+        return self::$hasChallengeProgressColumn;
+    }
     /**
      * @param  Collection<int, WorkoutLog>|array<int, WorkoutLog>  $workouts
      * @return array<int, array<string, mixed>>
@@ -75,7 +96,7 @@ final class WorkoutJsonPresenter
 
         $data['linked_challenge'] = null;
         if (
-            Schema::hasColumn($workout->getTable(), 'admin_event_id')
+            self::hasAdminEventIdColumn()
             && ! empty($workout->admin_event_id)
             && Schema::hasTable('admin_events')
         ) {
@@ -110,8 +131,7 @@ final class WorkoutJsonPresenter
 
         $linkedIds = $workouts
             ->filter(function (WorkoutLog $workout) {
-                return Schema::hasColumn($workout->getTable(), 'admin_event_id')
-                    && ! empty($workout->admin_event_id);
+                return self::hasAdminEventIdColumn() && ! empty($workout->admin_event_id);
             })
             ->pluck('id')
             ->map(fn ($id) => (string) $id)
@@ -161,7 +181,7 @@ final class WorkoutJsonPresenter
             }
 
             if (
-                Schema::hasColumn($workout->getTable(), 'challenge_progress_approved_km')
+                self::hasChallengeProgressColumn()
                 && (float) ($workout->challenge_progress_approved_km ?? 0) > 0
             ) {
                 return 'applied';
@@ -184,7 +204,7 @@ final class WorkoutJsonPresenter
             }
 
             if (
-                Schema::hasColumn($workout->getTable(), 'challenge_progress_approved_km')
+                self::hasChallengeProgressColumn()
                 && (float) ($workout->challenge_progress_approved_km ?? 0) > 0
             ) {
                 return 'applied';
