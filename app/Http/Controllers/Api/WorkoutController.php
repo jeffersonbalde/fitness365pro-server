@@ -61,6 +61,15 @@ class WorkoutController extends Controller
         return WorkoutJsonPresenter::serializeForClientViewer($workout, $viewerId);
     }
 
+    /**
+     * @param  \Illuminate\Support\Collection<int, WorkoutLog>|\Illuminate\Database\Eloquent\Collection<int, WorkoutLog>  $workouts
+     * @return array<int, array<string, mixed>>
+     */
+    private function serializeWorkouts($workouts, string $viewerId): array
+    {
+        return WorkoutJsonPresenter::serializeManyForClientViewer($workouts, $viewerId);
+    }
+
     private function serializeComment(WorkoutComment $comment, string $viewerId, bool $includeReplies = true): array
     {
         $mapped = [
@@ -533,7 +542,9 @@ class WorkoutController extends Controller
         $rankingEnabled = (bool) config('social.feed_ranking.enabled', true);
         $monitoringEnabled = (bool) config('social.feed_ranking.monitoring_enabled', true);
 
-        $followingIds = $viewer->following()->pluck('clients.id');
+        $followingIds = $scope === 'following'
+            ? $viewer->following()->pluck('clients.id')
+            : collect();
         $followingLookup = array_fill_keys($followingIds->map(fn ($id) => (string) $id)->all(), true);
 
         $baseQuery = WorkoutLog::query()
@@ -552,13 +563,12 @@ class WorkoutController extends Controller
         }
 
         if ($sort === 'chronological' || !$rankingEnabled) {
-            $workouts = $baseQuery
+            $workoutRows = $baseQuery
                 ->orderByDesc('workout_date')
                 ->orderByDesc('created_at')
                 ->limit($limit)
-                ->get()
-                ->map(fn (WorkoutLog $workout) => $this->serializeWorkout($workout, $viewer->id))
-                ->values();
+                ->get();
+            $workouts = collect($this->serializeWorkouts($workoutRows, $viewer->id))->values();
 
             return response()->json([
                 'success' => true,
@@ -588,9 +598,14 @@ class WorkoutController extends Controller
             ->take($limit)
             ->values();
 
-        $serialized = $ranked->map(function (array $row) use ($viewer) {
-            $payload = $this->serializeWorkout($row['workout'], $viewer->id);
+        $rankedWorkouts = $ranked->pluck('workout');
+        $serializedById = collect($this->serializeWorkouts($rankedWorkouts, $viewer->id))
+            ->keyBy('id');
+        $serialized = $ranked->map(function (array $row) use ($serializedById, $viewer) {
+            $payload = $serializedById->get($row['workout']->id)
+                ?? $this->serializeWorkout($row['workout'], $viewer->id);
             $payload['ranking_score'] = $row['score'];
+
             return $payload;
         })->values();
 
@@ -644,7 +659,7 @@ class WorkoutController extends Controller
         $query = trim((string) $request->input('query'));
         $limit = (int) $request->input('limit', 20);
 
-        $workouts = WorkoutLog::query()
+        $workoutRows = WorkoutLog::query()
             ->where('status', 'completed')
             ->when(
                 Schema::hasColumn((new WorkoutLog)->getTable(), 'admin_event_id'),
@@ -669,9 +684,8 @@ class WorkoutController extends Controller
             ->orderByDesc('workout_date')
             ->orderByDesc('created_at')
             ->limit($limit)
-            ->get()
-            ->map(fn (WorkoutLog $workout) => $this->serializeWorkout($workout, $viewer->id))
-            ->values();
+            ->get();
+        $workouts = collect($this->serializeWorkouts($workoutRows, $viewer->id))->values();
 
         return response()->json([
             'success' => true,
