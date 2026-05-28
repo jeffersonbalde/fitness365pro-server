@@ -14,6 +14,9 @@ class BadgeShareWebController extends Controller
     ) {
     }
 
+
+    
+
     /**
      * Public share landing page with Open Graph meta tags for Facebook/social crawlers.
      */
