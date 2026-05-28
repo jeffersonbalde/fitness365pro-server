@@ -8,7 +8,6 @@ use App\Models\WorkoutLog;
 use App\Services\EventProgressSubmissionService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Facades\URL;
 
 /**
  * Client-facing workout payloads (feed, journals) — extracted for reuse outside WorkoutController.
@@ -262,7 +261,13 @@ final class WorkoutJsonPresenter
                 ->map(fn ($segment) => rawurlencode($segment))
                 ->implode('/');
 
-            return URL::to("/api/v1/profile/media/{$encodedPath}");
+            // Relative path — client resolves against VITE_LARAVEL_API origin (works on DO subpaths).
+            return "/api/v1/profile/media/{$encodedPath}";
+        }
+
+        // Legacy absolute URL that already points at API media — strip host, keep path.
+        if (preg_match('#/api/v1/profile/media/(.+)$#i', $url, $matches)) {
+            return '/api/v1/profile/media/'.$matches[1];
         }
 
         return trim($url);
