@@ -7,6 +7,7 @@ use App\Mail\EmailOtpMail;
 use App\Models\Client;
 use App\Models\EmailOtp;
 use App\Models\RefreshToken;
+use App\Support\AuthTokenConfig;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
@@ -18,9 +19,6 @@ class EmailVerificationController extends Controller
     private int $resendCooldownSeconds = 60;
     private int $maxAttempts = 5;
 
-    private int $accessTokenMinutes = 60;
-    private int $refreshTokenDays = 14;
-
     private function issueRefreshToken(Request $request, Client $client): string
     {
         $plain = Str::random(80);
@@ -30,7 +28,7 @@ class EmailVerificationController extends Controller
             'tokenable_type' => Client::class,
             'tokenable_id' => $client->id,
             'token_hash' => $hash,
-            'expires_at' => now()->addDays($this->refreshTokenDays),
+            'expires_at' => now()->addDays(AuthTokenConfig::refreshTokenDays()),
             'ip_address' => $request->ip(),
             'user_agent' => substr((string) $request->userAgent(), 0, 1000),
         ]);
@@ -162,7 +160,7 @@ class EmailVerificationController extends Controller
 
         if ($client->email_verified_at) {
             // Already verified: issue tokens to proceed
-            $expiresAt = now()->addMinutes($this->accessTokenMinutes);
+            $expiresAt = now()->addMinutes(AuthTokenConfig::accessTokenMinutes());
             $token = $client->createToken('auth-token', ['*'], $expiresAt)->plainTextToken;
             $refreshToken = $this->issueRefreshToken($request, $client);
 
@@ -174,9 +172,9 @@ class EmailVerificationController extends Controller
                         ...$this->clientPayload($client),
                     ],
                     'token' => $token,
-                    'expires_in' => $this->accessTokenMinutes * 60,
+                    'expires_in' => AuthTokenConfig::accessTokenSeconds(),
                     'refresh_token' => $refreshToken,
-                    'refresh_expires_in' => $this->refreshTokenDays * 24 * 60 * 60,
+                    'refresh_expires_in' => AuthTokenConfig::refreshTokenSeconds(),
                 ],
             ], 200);
         }
@@ -225,7 +223,7 @@ class EmailVerificationController extends Controller
         $client->forceFill(['email_verified_at' => now()])->save();
 
         // Issue tokens after verification
-        $expiresAt = now()->addMinutes($this->accessTokenMinutes);
+        $expiresAt = now()->addMinutes(AuthTokenConfig::accessTokenMinutes());
         $token = $client->createToken('auth-token', ['*'], $expiresAt)->plainTextToken;
         $refreshToken = $this->issueRefreshToken($request, $client);
 
@@ -237,9 +235,9 @@ class EmailVerificationController extends Controller
                     ...$this->clientPayload($client),
                 ],
                 'token' => $token,
-                'expires_in' => $this->accessTokenMinutes * 60,
+                'expires_in' => AuthTokenConfig::accessTokenSeconds(),
                 'refresh_token' => $refreshToken,
-                'refresh_expires_in' => $this->refreshTokenDays * 24 * 60 * 60,
+                'refresh_expires_in' => AuthTokenConfig::refreshTokenSeconds(),
             ],
         ], 200);
     }

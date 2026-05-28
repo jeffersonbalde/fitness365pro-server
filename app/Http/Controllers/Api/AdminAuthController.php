@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Admin;
 use App\Models\RefreshToken;
+use App\Support\AuthTokenConfig;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
@@ -12,9 +13,6 @@ use Illuminate\Support\Str;
 
 class AdminAuthController extends Controller
 {
-    private int $accessTokenMinutes = 60;
-    private int $refreshTokenDays = 14;
-
     private function issueRefreshToken(Request $request, Admin $admin): string
     {
         $plain = Str::random(80);
@@ -24,7 +22,7 @@ class AdminAuthController extends Controller
             'tokenable_type' => Admin::class,
             'tokenable_id' => $admin->id,
             'token_hash' => $hash,
-            'expires_at' => now()->addDays($this->refreshTokenDays),
+            'expires_at' => now()->addDays(AuthTokenConfig::refreshTokenDays()),
             'ip_address' => $request->ip(),
             'user_agent' => substr((string) $request->userAgent(), 0, 1000),
         ]);
@@ -62,7 +60,7 @@ class AdminAuthController extends Controller
             ], 401);
         }
 
-        $expiresAt = now()->addMinutes($this->accessTokenMinutes);
+        $expiresAt = now()->addMinutes(AuthTokenConfig::accessTokenMinutes());
         $token = $admin->createToken('admin-token', ['*'], $expiresAt)->plainTextToken;
         $refreshToken = $this->issueRefreshToken($request, $admin);
 
@@ -77,9 +75,9 @@ class AdminAuthController extends Controller
                     'email_verified_at' => $admin->email_verified_at,
                 ],
                 'token' => $token,
-                'expires_in' => $this->accessTokenMinutes * 60,
+                'expires_in' => AuthTokenConfig::accessTokenSeconds(),
                 'refresh_token' => $refreshToken,
-                'refresh_expires_in' => $this->refreshTokenDays * 24 * 60 * 60,
+                'refresh_expires_in' => AuthTokenConfig::refreshTokenSeconds(),
             ],
         ], 200);
     }
@@ -170,7 +168,7 @@ class AdminAuthController extends Controller
 
         $stored->update(['revoked_at' => now()]);
 
-        $expiresAt = now()->addMinutes($this->accessTokenMinutes);
+        $expiresAt = now()->addMinutes(AuthTokenConfig::accessTokenMinutes());
         $token = $admin->createToken('admin-token', ['*'], $expiresAt)->plainTextToken;
         $newRefresh = $this->issueRefreshToken($request, $admin);
 
@@ -179,9 +177,9 @@ class AdminAuthController extends Controller
             'message' => 'Token refreshed successfully',
             'data' => [
                 'token' => $token,
-                'expires_in' => $this->accessTokenMinutes * 60,
+                'expires_in' => AuthTokenConfig::accessTokenSeconds(),
                 'refresh_token' => $newRefresh,
-                'refresh_expires_in' => $this->refreshTokenDays * 24 * 60 * 60,
+                'refresh_expires_in' => AuthTokenConfig::refreshTokenSeconds(),
             ],
         ], 200);
     }

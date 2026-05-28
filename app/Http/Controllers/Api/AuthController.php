@@ -8,6 +8,7 @@ use App\Models\RefreshToken;
 use App\Models\EmailOtp;
 use App\Mail\EmailOtpMail;
 use App\Services\ClientNotificationService;
+use App\Support\AuthTokenConfig;
 use App\Support\FirebaseCredentials;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -23,8 +24,6 @@ use Kreait\Firebase\Exception\Auth\FailedToVerifyToken;
 
 class AuthController extends Controller
 {
-    private int $accessTokenMinutes = 60; // short-lived access token (1 hour)
-    private int $refreshTokenDays = 14;   // refresh token lifetime (2 weeks)
     private int $otpMinutes = 10;
 
     private function generateOtp(): string
@@ -57,7 +56,7 @@ class AuthController extends Controller
             'tokenable_type' => Client::class,
             'tokenable_id' => $client->id,
             'token_hash' => $hash,
-            'expires_at' => now()->addDays($this->refreshTokenDays),
+            'expires_at' => now()->addDays(AuthTokenConfig::refreshTokenDays()),
             'ip_address' => $request->ip(),
             'user_agent' => substr((string) $request->userAgent(), 0, 1000),
         ]);
@@ -229,7 +228,7 @@ class AuthController extends Controller
         // Revoke all existing tokens (optional - for single device login)
         // $client->tokens()->delete();
 
-        $expiresAt = now()->addMinutes($this->accessTokenMinutes);
+        $expiresAt = now()->addMinutes(AuthTokenConfig::accessTokenMinutes());
         $token = $client->createToken('auth-token', ['*'], $expiresAt)->plainTextToken;
         $refreshToken = $this->issueRefreshToken($request, $client);
 
@@ -243,9 +242,9 @@ class AuthController extends Controller
                     ...$this->clientPayload($client),
                 ],
                 'token' => $token,
-                'expires_in' => $this->accessTokenMinutes * 60,
+                'expires_in' => AuthTokenConfig::accessTokenSeconds(),
                 'refresh_token' => $refreshToken,
-                'refresh_expires_in' => $this->refreshTokenDays * 24 * 60 * 60,
+                'refresh_expires_in' => AuthTokenConfig::refreshTokenSeconds(),
             ],
         ], 200);
     }
@@ -334,7 +333,7 @@ class AuthController extends Controller
         // Revoke old refresh token (rotate)
         $stored->update(['revoked_at' => now()]);
 
-        $expiresAt = now()->addMinutes($this->accessTokenMinutes);
+        $expiresAt = now()->addMinutes(AuthTokenConfig::accessTokenMinutes());
         $token = $client->createToken('auth-token', ['*'], $expiresAt)->plainTextToken;
         $newRefresh = $this->issueRefreshToken($request, $client);
 
@@ -343,9 +342,9 @@ class AuthController extends Controller
             'message' => 'Token refreshed successfully',
             'data' => [
                 'token' => $token,
-                'expires_in' => $this->accessTokenMinutes * 60,
+                'expires_in' => AuthTokenConfig::accessTokenSeconds(),
                 'refresh_token' => $newRefresh,
-                'refresh_expires_in' => $this->refreshTokenDays * 24 * 60 * 60,
+                'refresh_expires_in' => AuthTokenConfig::refreshTokenSeconds(),
             ],
         ], 200);
     }
@@ -471,7 +470,7 @@ class AuthController extends Controller
             }
         }
 
-        $expiresAt = now()->addMinutes($this->accessTokenMinutes);
+        $expiresAt = now()->addMinutes(AuthTokenConfig::accessTokenMinutes());
         $token = $clientModel->createToken('auth-token', ['*'], $expiresAt)->plainTextToken;
         $refreshToken = $this->issueRefreshToken($request, $clientModel);
 
@@ -487,9 +486,9 @@ class AuthController extends Controller
                     ...$this->clientPayload($clientModel),
                 ],
                 'token' => $token,
-                'expires_in' => $this->accessTokenMinutes * 60,
+                'expires_in' => AuthTokenConfig::accessTokenSeconds(),
                 'refresh_token' => $refreshToken,
-                'refresh_expires_in' => $this->refreshTokenDays * 24 * 60 * 60,
+                'refresh_expires_in' => AuthTokenConfig::refreshTokenSeconds(),
             ],
         ], 200);
     }
