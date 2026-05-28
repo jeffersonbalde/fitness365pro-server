@@ -13,6 +13,7 @@ use App\Services\ClientNotificationService;
 use App\Services\EventProgressSubmissionService;
 use App\Services\Social\FeedRankingService;
 use App\Services\WorkoutStatsService;
+use App\Rules\ValidWorkoutImage;
 use App\Support\WorkoutJsonPresenter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -143,7 +144,7 @@ class WorkoutController extends Controller
             'caption' => 'nullable|string|max:2200',
             'location' => 'nullable|string|max:255',
             'workout_images' => 'nullable|array',
-            'workout_images.*' => 'image|mimes:jpeg,png,jpg,gif,webp|max:10240',
+            'workout_images.*' => ['required', new ValidWorkoutImage()],
             'replace_images' => 'nullable|boolean',
             'keep_workout_images' => 'nullable|array',
             'keep_workout_images.*' => 'string',
