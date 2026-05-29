@@ -6,7 +6,7 @@ use App\Models\Client;
 use App\Services\WorkoutStatsService;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
-
+    
 class BadgeShareWebController extends Controller
 {
     public function __construct(
