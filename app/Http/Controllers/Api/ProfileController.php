@@ -9,6 +9,7 @@ use App\Models\ClientAdminEventRegistration;
 use App\Models\ClientBadge;
 use App\Models\ClientProfile;
 use App\Models\WorkoutLog;
+use App\Rules\ValidProfileImage;
 use App\Support\PublicUploadStorage;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -298,7 +299,7 @@ class ProfileController extends Controller
     public function uploadPicture(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'profile_picture' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:10240',
+            'profile_picture' => ['required', 'file', new ValidProfileImage(10240)],
         ]);
 
         if ($validator->fails()) {
@@ -338,7 +339,7 @@ class ProfileController extends Controller
     public function uploadCoverPhoto(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'cover_photo' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:15360',
+            'cover_photo' => ['required', 'file', new ValidProfileImage(15360)],
         ]);
 
         if ($validator->fails()) {
