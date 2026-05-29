@@ -11,6 +11,20 @@ use Illuminate\Support\Facades\Validator;
 
 class OnboardingController extends Controller
 {
+    private function stepResponse(ClientProfile $profile, int $step): array
+    {
+        return [
+            'profile' => [
+                'onboarding_step' => $profile->onboarding_step,
+                'onboarding_completed' => (bool) $profile->onboarding_completed,
+                'bmi' => $profile->bmi,
+                'bmi_category' => $profile->bmi_category,
+                'body_type' => $profile->body_type,
+            ],
+            'current_step' => $step,
+        ];
+    }
+
     private function deriveOverallExperienceLevel(?string $running, ?string $gym, ?string $others): ?string
     {
         $rank = [
@@ -84,9 +98,7 @@ class OnboardingController extends Controller
                     ], 422);
                 }
 
-                $goals = Goal::whereIn('id', $request->goals)->get();
-                $client->goals()->sync($goals->pluck('id')->toArray());
-                // Move user to step 2 (profile + metrics)
+                $client->goals()->sync($request->goals);
                 $profile->onboarding_step = 2;
                 $profile->save();
 
@@ -141,12 +153,11 @@ class OnboardingController extends Controller
                     ], 422);
                 }
 
-                $profile->update($request->only([
+                $profile->fill($request->only([
                     'city',
                     'province',
                     'country',
                 ]));
-                // Move user to step 4 (preferences)
                 $profile->onboarding_step = 4;
                 $profile->save();
 
@@ -287,24 +298,18 @@ class OnboardingController extends Controller
                 return response()->json([
                     'success' => true,
                     'message' => 'Onboarding completed successfully',
-                    'data' => [
-                        'profile' => $profile->fresh(),
-                    ],
+                    'data' => $this->stepResponse($profile, 6),
                 ], 200);
         }
 
-        // Save profile if not already saved in case
-        if (!$profile->isDirty()) {
+        if ($profile->isDirty()) {
             $profile->save();
         }
 
         return response()->json([
             'success' => true,
             'message' => "Step {$step} completed",
-            'data' => [
-                'profile' => $profile->fresh(),
-                'current_step' => $step,
-            ],
+            'data' => $this->stepResponse($profile, $step),
         ], 200);
     }
 
