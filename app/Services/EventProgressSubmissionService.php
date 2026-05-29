@@ -305,6 +305,40 @@ class EventProgressSubmissionService
             ->count();
     }
 
+    /**
+     * Pending submission totals keyed by admin_event_id for one client.
+     *
+     * @param  list<string>  $adminEventIds
+     * @return array<string, array{pending_km: float, pending_count: int}>
+     */
+    public static function pendingSummaryForClientEvents(string $clientId, array $adminEventIds): array
+    {
+        if (! static::tableReady() || $adminEventIds === []) {
+            return [];
+        }
+
+        $ids = array_values(array_unique(array_map('strval', $adminEventIds)));
+
+        $rows = EventProgressSubmission::query()
+            ->where('client_id', $clientId)
+            ->whereIn('admin_event_id', $ids)
+            ->where('status', EventProgressSubmission::STATUS_PENDING)
+            ->selectRaw('admin_event_id, COALESCE(SUM(distance_delta_km), 0) as pending_km, COUNT(*) as pending_count')
+            ->groupBy('admin_event_id')
+            ->get();
+
+        $out = [];
+        foreach ($rows as $row) {
+            $eventId = (string) $row->admin_event_id;
+            $out[$eventId] = [
+                'pending_km' => (float) $row->pending_km,
+                'pending_count' => (int) $row->pending_count,
+            ];
+        }
+
+        return $out;
+    }
+
     protected static function approvedKmOnWorkout(WorkoutLog $w): float
     {
         if (! Schema::hasColumn($w->getTable(), 'challenge_progress_approved_km')) {

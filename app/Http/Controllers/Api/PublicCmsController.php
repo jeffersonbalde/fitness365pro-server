@@ -14,6 +14,7 @@ use App\Services\EventEnrollmentProgressService;
 use App\Support\ViewerChallengeProgressPresenter;
 use App\Support\RegistrationDeliveryCatalog;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
@@ -23,8 +24,17 @@ class PublicCmsController extends Controller
     /**
      * @return array<string, mixed>|null
      */
-    private function challengeProgressSliceForViewer(AdminEvent $event, ?ClientAdminEventRegistration $reg, string $clientId): ?array
-    {
+    private function challengeProgressSliceForViewer(
+        AdminEvent $event,
+        ?ClientAdminEventRegistration $reg,
+        string $clientId,
+        ?array $pendingByEventId = null,
+        bool $readOnly = false,
+    ): ?array {
+        if ($readOnly) {
+            return ViewerChallengeProgressPresenter::sliceReadOnly($event, $reg, $clientId, $pendingByEventId);
+        }
+
         return ViewerChallengeProgressPresenter::slice($event, $reg, $clientId);
     }
 
@@ -81,8 +91,14 @@ class PublicCmsController extends Controller
     /**
      * @return array<string, mixed>
      */
-    private function mapClientSummaryForLeaderboard(Client $client, ?Client $viewer = null): array
-    {
+    /**
+     * @param  array<string, true>|null  $followingIdSet
+     */
+    private function mapClientSummaryForLeaderboard(
+        Client $client,
+        ?Client $viewer = null,
+        ?array $followingIdSet = null,
+    ): array {
         $profile = $client->profile;
         $displayName = $this->displayNameFromProfile($profile);
         if ($displayName === 'Fitness 365 member' && $client->email) {
@@ -99,13 +115,198 @@ class PublicCmsController extends Controller
             'primary_niche' => $profile?->primary_niche,
         ];
 
-        if ($viewer && $viewer->id !== $client->id && Schema::hasTable('client_follows')) {
-            $mapped['is_following'] = $viewer->following()
-                ->where('clients.id', $client->id)
-                ->exists();
+        if ($viewer && $viewer->id !== $client->id) {
+            $mapped['is_following'] = isset($followingIdSet[(string) $client->id]);
         }
 
         return $mapped;
+    }
+
+    /**
+     * @param  list<string>  $clientIds
+     * @return array<string, true>
+     */
+    private function followingIdSetForViewer(?Client $viewer, array $clientIds): array
+    {
+        if (! $viewer || $clientIds === [] || ! Schema::hasTable('client_follows')) {
+            return [];
+        }
+
+        $ids = $viewer->following()
+            ->whereIn('clients.id', $clientIds)
+            ->pluck('clients.id')
+            ->map(static fn ($id) => (string) $id)
+            ->all();
+
+        return array_fill_keys($ids, true);
+    }
+
+    private function applyLeaderboardOrdering($query, bool $progressReady): void
+    {
+        if ($progressReady) {
+            $query
+                ->orderByRaw('COALESCE(progress_logged_km, 0) DESC')
+                ->orderByRaw('CASE WHEN progress_pace_min_per_km IS NULL OR progress_pace_min_per_km <= 0 THEN 999999 ELSE progress_pace_min_per_km END ASC')
+                ->orderBy('updated_at');
+        } else {
+            $query->orderByDesc('created_at');
+        }
+    }
+
+    /**
+     * @return list<array{key: string, label: string}>
+     */
+    private function leaderboardCategoriesForEvent(AdminEvent $event, bool $runningSelectionsReady): array
+    {
+        $buckets = [
+            '_general' => ['key' => '_general', 'label' => 'General'],
+        ];
+
+        if (! $runningSelectionsReady) {
+            return array_values($buckets);
+        }
+
+        $selections = ClientAdminEventRunningSelection::query()
+            ->where('admin_event_id', $event->id)
+            ->get(['distance_key', 'distance_label']);
+
+        foreach ($selections as $selection) {
+            $distanceKey = (string) ($selection->distance_key ?? '');
+            if ($distanceKey === '') {
+                continue;
+            }
+            $distanceLabel = EventEnrollmentProgressService::runningTargetDisplay(
+                $distanceKey,
+                $selection->distance_label !== null ? (string) $selection->distance_label : null
+            ) ?? $distanceKey;
+
+            $buckets[$distanceKey] = [
+                'key' => $distanceKey,
+                'label' => $distanceLabel !== '' ? $distanceLabel : ucfirst($distanceKey),
+            ];
+        }
+
+        if (strtolower((string) $event->category) !== '' && count($buckets) === 1) {
+            $buckets['_general']['label'] = ucfirst((string) $event->category);
+        }
+
+        return collect($buckets)->values()->sortBy('label')->values()->all();
+    }
+
+    private function applyLeaderboardCategoryFilter(
+        $query,
+        string $categoryFilter,
+        string $eventId,
+        bool $runningSelectionsReady,
+    ): void {
+        if ($categoryFilter === '' || $categoryFilter === 'all' || ! $runningSelectionsReady) {
+            return;
+        }
+
+        if ($categoryFilter === '_general') {
+            $query->whereNotIn('client_id', ClientAdminEventRunningSelection::query()
+                ->where('admin_event_id', $eventId)
+                ->whereNotNull('distance_key')
+                ->where('distance_key', '!=', '')
+                ->select('client_id'));
+
+            return;
+        }
+
+        $query->whereIn('client_id', ClientAdminEventRunningSelection::query()
+            ->where('admin_event_id', $eventId)
+            ->where('distance_key', $categoryFilter)
+            ->select('client_id'));
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function buildLeaderboardEntry(
+        ClientAdminEventRegistration $reg,
+        int $rank,
+        AdminEvent $event,
+        ?Client $viewer,
+        bool $progressReady,
+        $selectionsByClient,
+        ?array $followingIdSet,
+    ): ?array {
+        $client = $reg->client;
+        if ($client === null) {
+            return null;
+        }
+
+        $progress = $progressReady
+            ? $this->progressMetricsForRegistration($event, $reg)
+            : [
+                'logged_distance_km' => 0.0,
+                'goal_distance_km' => null,
+                'progress_percent' => null,
+                'target_label' => null,
+                'pace_min_per_km' => null,
+                'goal_completed' => false,
+            ];
+
+        $selection = $selectionsByClient->get((string) $client->id);
+        $distanceKey = $selection ? (string) ($selection->distance_key ?? '') : '';
+        $distanceLabel = $selection
+            ? (EventEnrollmentProgressService::runningTargetDisplay(
+                (string) $selection->distance_key,
+                $selection->distance_label !== null ? (string) $selection->distance_label : null
+            ) ?? (string) ($reg->progress_target_label ?? ''))
+            : (string) ($reg->progress_target_label ?? '');
+
+        if ($distanceLabel === '' && strtolower((string) $event->category) !== '') {
+            $distanceLabel = ucfirst((string) $event->category);
+        }
+
+        $categoryKey = $distanceKey !== '' ? $distanceKey : '_general';
+
+        return [
+            'global_rank' => $rank,
+            'rank' => $rank,
+            'category_key' => $categoryKey,
+            'category_label' => $distanceLabel !== '' ? $distanceLabel : 'General',
+            'progress' => $progress,
+            'user' => $this->mapClientSummaryForLeaderboard($client, $viewer, $followingIdSet),
+            'registered_at' => $reg->created_at?->toISOString(),
+        ];
+    }
+
+    private function viewerLeaderboardRank(
+        $baseQuery,
+        ClientAdminEventRegistration $viewerReg,
+        bool $progressReady,
+    ): int {
+        if (! $progressReady) {
+            return 1 + (clone $baseQuery)
+                ->where('created_at', '>', $viewerReg->created_at)
+                ->count();
+        }
+
+        $logged = (float) ($viewerReg->progress_logged_km ?? 0);
+        $pace = $viewerReg->progress_pace_min_per_km;
+        $paceSort = ($pace === null || (float) $pace <= 0) ? 999999 : (float) $pace;
+
+        $better = (clone $baseQuery)->where(function ($q) use ($logged, $paceSort, $viewerReg) {
+            $q->whereRaw('COALESCE(progress_logged_km, 0) > ?', [$logged])
+                ->orWhere(function ($inner) use ($logged, $paceSort, $viewerReg) {
+                    $inner->whereRaw('COALESCE(progress_logged_km, 0) = ?', [$logged])
+                        ->where(function ($paceQ) use ($paceSort, $viewerReg) {
+                            $paceQ->whereRaw(
+                                'CASE WHEN progress_pace_min_per_km IS NULL OR progress_pace_min_per_km <= 0 THEN 999999 ELSE progress_pace_min_per_km END < ?',
+                                [$paceSort]
+                            )->orWhere(function ($tieQ) use ($paceSort, $viewerReg) {
+                                $tieQ->whereRaw(
+                                    'CASE WHEN progress_pace_min_per_km IS NULL OR progress_pace_min_per_km <= 0 THEN 999999 ELSE progress_pace_min_per_km END = ?',
+                                    [$paceSort]
+                                )->where('updated_at', '<', $viewerReg->updated_at);
+                            });
+                        });
+                });
+        })->count();
+
+        return $better + 1;
     }
 
     /**
@@ -236,13 +437,31 @@ class PublicCmsController extends Controller
 
     public function events(Request $request)
     {
-        if (!Schema::hasTable('admin_events')) {
+        if (! Schema::hasTable('admin_events')) {
             return response()->json([
                 'success' => true,
                 'data' => ['events' => [], 'total' => 0],
             ]);
         }
 
+        $viewerId = $request->user()?->id;
+        $cacheKey = 'cms_events:list:'.($viewerId ? (string) $viewerId : 'guest');
+
+        $payload = Cache::remember($cacheKey, 30, function () use ($viewerId) {
+            return $this->buildEventsListPayload($viewerId);
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $payload,
+        ]);
+    }
+
+    /**
+     * @return array{events: \Illuminate\Support\Collection, total: int}
+     */
+    private function buildEventsListPayload(?string $viewerId): array
+    {
         $now = now('UTC');
 
         $registrationsReady = Schema::hasTable('client_admin_event_registrations');
@@ -258,25 +477,24 @@ class PublicCmsController extends Controller
                     },
                 ]);
             } else {
-                // Legacy schema: count all registration rows until payment/status migration runs.
                 $query->withCount('registrations as participants_count');
             }
         }
+
         $items = $query
             ->active($now)
             ->orderBy('starts_at')
             ->orderByDesc('created_at')
-            ->limit(100)
-            ->get();
+            ->limit(50)
+            ->get(['id', 'title', 'description', 'image_url', 'location', 'category', 'location_type', 'venue', 'registration_starts_at', 'registration_deadline', 'starts_at', 'ends_at', 'fee_type', 'fee', 'publish_at', 'created_at', 'admin_id', 'participants_count', 'registrations_count', 'mileage_challenge_km']);
 
-        $viewerId = $request->user()?->id;
-        $registrationStatusTrackedForViewer = Schema::hasTable('client_admin_event_registrations')
+        $registrationStatusTrackedForViewer = $registrationsReady
             && Schema::hasColumn('client_admin_event_registrations', 'registration_status');
 
         /** @var \Illuminate\Support\Collection<string, ClientAdminEventRegistration> $viewerRegsByEvent */
         $viewerRegsByEvent = collect();
 
-        if ($viewerId !== null && Schema::hasTable('client_admin_event_registrations') && $items->isNotEmpty()) {
+        if ($viewerId !== null && $registrationsReady && $items->isNotEmpty()) {
             $viewerRegsByEvent = ClientAdminEventRegistration::query()
                 ->where('client_id', (string) $viewerId)
                 ->whereIn('admin_event_id', $items->pluck('id'))
@@ -284,11 +502,20 @@ class PublicCmsController extends Controller
                 ->keyBy(static fn ($row) => (string) $row->admin_event_id);
         }
 
+        $pendingByEventId = [];
+        if ($viewerId !== null && $viewerRegsByEvent->isNotEmpty()) {
+            $pendingByEventId = \App\Services\EventProgressSubmissionService::pendingSummaryForClientEvents(
+                (string) $viewerId,
+                $viewerRegsByEvent->keys()->map(static fn ($id) => (string) $id)->values()->all(),
+            );
+        }
+
         $payload = $items->map(function (AdminEvent $event) use (
             $registrationsReady,
             $registrationStatusTrackedForViewer,
             $viewerRegsByEvent,
             $viewerId,
+            $pendingByEventId,
         ) {
             /** @var ClientAdminEventRegistration|null $regRow */
             $regRow = $viewerId !== null ? $viewerRegsByEvent->get((string) $event->id) : null;
@@ -299,57 +526,44 @@ class PublicCmsController extends Controller
             );
 
             return [
-                    'id' => $event->id,
-                    'source' => 'admin_event',
-                    'title' => $event->title,
-                    'description' => $event->description,
-                    'how_it_works' => $event->how_it_works,
-                    'participant_rules' => $event->participant_rules,
-                    'image_url' => $event->image_url,
-                    'badges' => $event->badges,
-                    'location' => $event->location,
-                    'category' => $event->category,
-                    'location_type' => $event->location_type,
-                    'venue' => $event->venue,
-                    'registration_starts_at' => $event->registration_starts_at?->toISOString(),
-                    'registration_deadline' => $event->registration_deadline?->toISOString(),
-                    'participants_count' => $registrationsReady
-                        ? (int) ($event->participants_count ?? $event->registrations_count ?? 0)
-                        : 0,
-                    'starts_at' => $event->starts_at?->toISOString(),
-                    'ends_at' => $event->ends_at?->toISOString(),
-                    'fee_type' => $event->fee_type,
-                    'fee' => (float) $event->fee,
-                    'running_details' => $event->running_details,
-                    'gym_details' => $event->gym_details,
-                    'delivery_areas' => RegistrationDeliveryCatalog::resolve(
-                        is_array($event->delivery_areas) ? $event->delivery_areas : null
-                    ),
-                    'published_at' => ($event->publish_at ?? $event->created_at)?->toISOString(),
-                    'author' => [
-                        'name' => $event->admin?->name ?? 'Administrator',
-                        'email' => $event->admin?->email,
-                    ],
-                    'viewer_registration' => [
-                        'registered' => $viewerConfirmed,
-                        'confirmed' => $viewerConfirmed,
-                        'registration_status' => $regRow?->registration_status,
-                        'payment_status' => $regRow?->payment_status,
-                        'challenge_progress' => $viewerConfirmed && $viewerId
-                            ? $this->challengeProgressSliceForViewer($event, $regRow, (string) $viewerId)
-                            : null,
-                    ],
-                ];
-            })
-            ->values();
+                'id' => $event->id,
+                'source' => 'admin_event',
+                'title' => $event->title,
+                'description' => $event->description,
+                'image_url' => $event->image_url,
+                'location' => $event->location,
+                'category' => $event->category,
+                'location_type' => $event->location_type,
+                'venue' => $event->venue,
+                'registration_starts_at' => $event->registration_starts_at?->toISOString(),
+                'registration_deadline' => $event->registration_deadline?->toISOString(),
+                'participants_count' => $registrationsReady
+                    ? (int) ($event->participants_count ?? $event->registrations_count ?? 0)
+                    : 0,
+                'starts_at' => $event->starts_at?->toISOString(),
+                'ends_at' => $event->ends_at?->toISOString(),
+                'fee_type' => $event->fee_type,
+                'fee' => (float) $event->fee,
+                'published_at' => ($event->publish_at ?? $event->created_at)?->toISOString(),
+                'author' => [
+                    'name' => $event->admin?->name ?? 'Administrator',
+                ],
+                'viewer_registration' => [
+                    'registered' => $viewerConfirmed,
+                    'confirmed' => $viewerConfirmed,
+                    'registration_status' => $regRow?->registration_status,
+                    'payment_status' => $regRow?->payment_status,
+                    'challenge_progress' => $viewerConfirmed && $viewerId
+                        ? $this->challengeProgressSliceForViewer($event, $regRow, (string) $viewerId, $pendingByEventId, readOnly: true)
+                        : null,
+                ],
+            ];
+        })->values();
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'events' => $payload,
-                'total' => $payload->count(),
-            ],
-        ]);
+        return [
+            'events' => $payload,
+            'total' => $payload->count(),
+        ];
     }
 
     public function eventShow(Request $request, string $id)
@@ -498,7 +712,18 @@ class PublicCmsController extends Controller
                         'confirmed' => $viewerConfirmed,
                         'registration_status' => $regRow?->registration_status,
                         'payment_status' => $regRow?->payment_status,
-                        'challenge_progress' => $this->challengeProgressSliceForViewer($event, $regRow, (string) $request->user()->id),
+                        'challenge_progress' => $viewerConfirmed
+                            ? $this->challengeProgressSliceForViewer(
+                                $event,
+                                $regRow,
+                                (string) $request->user()->id,
+                                \App\Services\EventProgressSubmissionService::pendingSummaryForClientEvents(
+                                    (string) $request->user()->id,
+                                    [(string) $event->id],
+                                ),
+                                readOnly: true,
+                            )
+                            : null,
                     ],
                     'participants_preview' => $participantsPreview,
                     'participants_truncated' => $participantsTruncated,
@@ -571,7 +796,7 @@ class PublicCmsController extends Controller
         }
 
         $categoryFilter = trim((string) $request->input('category', ''));
-        $limit = (int) $request->input('limit', 50);
+        $limit = min(100, max(1, (int) $request->input('limit', 50)));
         $viewer = $request->user();
         $registrationStatusTracked = Schema::hasColumn('client_admin_event_registrations', 'registration_status');
         $progressReady = Schema::hasColumn('client_admin_event_registrations', 'progress_logged_km');
@@ -583,110 +808,81 @@ class PublicCmsController extends Controller
             ->whereHas('client', fn ($q) => $q->whereNull('deleted_at'));
 
         $participantsCount = (clone $baseQuery)->count();
+        $categories = $this->leaderboardCategoriesForEvent($event, $runningSelectionsReady);
 
-        $listQuery = (clone $baseQuery)
-            ->with(['client.profile']);
+        $filteredQuery = clone $baseQuery;
+        $this->applyLeaderboardCategoryFilter($filteredQuery, $categoryFilter, (string) $event->id, $runningSelectionsReady);
 
-        if ($progressReady) {
-            $listQuery
-                ->orderByRaw('COALESCE(progress_logged_km, 0) DESC')
-                ->orderByRaw('CASE WHEN progress_pace_min_per_km IS NULL OR progress_pace_min_per_km <= 0 THEN 999999 ELSE progress_pace_min_per_km END ASC')
-                ->orderBy('updated_at');
-        } else {
-            $listQuery->orderByDesc('created_at');
-        }
+        $totalInView = (clone $filteredQuery)->count();
 
-        /** @var \Illuminate\Database\Eloquent\Collection<int, ClientAdminEventRegistration> $allRegs */
-        $allRegs = $listQuery->get();
+        $listQuery = (clone $filteredQuery)->with(['client.profile']);
+        $this->applyLeaderboardOrdering($listQuery, $progressReady);
+
+        /** @var \Illuminate\Database\Eloquent\Collection<int, ClientAdminEventRegistration> $pageRegs */
+        $pageRegs = $listQuery->limit($limit)->get();
 
         $selectionsByClient = collect();
-        if ($runningSelectionsReady && $allRegs->isNotEmpty()) {
+        if ($runningSelectionsReady && $pageRegs->isNotEmpty()) {
+            $clientIds = $pageRegs->pluck('client_id')->map(static fn ($id) => (string) $id)->all();
             $selectionsByClient = ClientAdminEventRunningSelection::query()
                 ->where('admin_event_id', $event->id)
-                ->whereIn('client_id', $allRegs->pluck('client_id'))
+                ->whereIn('client_id', $clientIds)
                 ->get()
                 ->keyBy(static fn ($row) => (string) $row->client_id);
         }
 
-        $categoryBuckets = [];
+        $followingIdSet = $this->followingIdSetForViewer(
+            $viewer,
+            $pageRegs->pluck('client_id')->map(static fn ($id) => (string) $id)->all(),
+        );
 
-        $entries = $allRegs->values()->map(function (ClientAdminEventRegistration $reg, int $index) use (
+        $limitedEntries = $pageRegs->values()->map(function (ClientAdminEventRegistration $reg, int $index) use (
             $event,
             $viewer,
             $progressReady,
             $selectionsByClient,
-            &$categoryBuckets,
+            $followingIdSet,
         ) {
-            $client = $reg->client;
-            if ($client === null) {
-                return null;
-            }
-
-            $progress = $progressReady
-                ? $this->progressMetricsForRegistration($event, $reg)
-                : [
-                    'logged_distance_km' => 0.0,
-                    'goal_distance_km' => null,
-                    'progress_percent' => null,
-                    'target_label' => null,
-                    'pace_min_per_km' => null,
-                    'goal_completed' => false,
-                ];
-
-            /** @var ClientAdminEventRunningSelection|null $selection */
-            $selection = $selectionsByClient->get((string) $client->id);
-            $distanceKey = $selection ? (string) ($selection->distance_key ?? '') : '';
-            $distanceLabel = $selection
-                ? (EventEnrollmentProgressService::runningTargetDisplay(
-                    (string) $selection->distance_key,
-                    $selection->distance_label !== null ? (string) $selection->distance_label : null
-                ) ?? (string) ($reg->progress_target_label ?? ''))
-                : (string) ($reg->progress_target_label ?? '');
-
-            if ($distanceLabel === '' && strtolower((string) $event->category) !== '') {
-                $distanceLabel = ucfirst((string) $event->category);
-            }
-
-            $categoryKey = $distanceKey !== '' ? $distanceKey : '_general';
-            if (! isset($categoryBuckets[$categoryKey])) {
-                $categoryBuckets[$categoryKey] = [
-                    'key' => $categoryKey,
-                    'label' => $distanceLabel !== '' ? $distanceLabel : 'General',
-                ];
-            }
-
-            return [
-                'global_rank' => $index + 1,
-                'category_key' => $categoryKey,
-                'category_label' => $distanceLabel !== '' ? $distanceLabel : 'General',
-                'progress' => $progress,
-                'user' => $this->mapClientSummaryForLeaderboard($client, $viewer),
-                'registered_at' => $reg->created_at?->toISOString(),
-            ];
+            return $this->buildLeaderboardEntry(
+                $reg,
+                $index + 1,
+                $event,
+                $viewer,
+                $progressReady,
+                $selectionsByClient,
+                $followingIdSet,
+            );
         })->filter()->values();
 
-        $categories = collect($categoryBuckets)
-            ->values()
-            ->sortBy('label')
-            ->values()
-            ->all();
+        $viewerRank = null;
+        if ($viewer) {
+            $viewerReg = (clone $filteredQuery)
+                ->where('client_id', $viewer->id)
+                ->with(['client.profile'])
+                ->first();
 
-        if ($categoryFilter !== '' && $categoryFilter !== 'all') {
-            $entries = $entries->filter(
-                fn (array $entry) => (string) ($entry['category_key'] ?? '') === $categoryFilter
-            )->values();
+            if ($viewerReg) {
+                $viewerRankNum = $this->viewerLeaderboardRank($filteredQuery, $viewerReg, $progressReady);
+                $viewerSelections = collect();
+                if ($runningSelectionsReady) {
+                    $viewerSelections = ClientAdminEventRunningSelection::query()
+                        ->where('admin_event_id', $event->id)
+                        ->where('client_id', $viewer->id)
+                        ->get()
+                        ->keyBy(static fn ($row) => (string) $row->client_id);
+                }
+                $viewerFollowing = $this->followingIdSetForViewer($viewer, [(string) $viewer->id]);
+                $viewerRank = $this->buildLeaderboardEntry(
+                    $viewerReg,
+                    $viewerRankNum,
+                    $event,
+                    $viewer,
+                    $progressReady,
+                    $viewerSelections,
+                    $viewerFollowing,
+                );
+            }
         }
-
-        $entries = $entries->map(function (array $entry, int $index) {
-            $entry['rank'] = $index + 1;
-
-            return $entry;
-        })->values();
-
-        $viewerRank = $viewer
-            ? $entries->firstWhere('user.id', (string) $viewer->id)
-            : null;
-        $limitedEntries = $entries->take($limit)->values();
 
         return response()->json([
             'success' => true,
@@ -708,7 +904,7 @@ class PublicCmsController extends Controller
                 'categories' => $categories,
                 'leaderboard' => $limitedEntries,
                 'viewer_rank' => $viewerRank,
-                'total' => $entries->count(),
+                'total' => $totalInView,
             ],
         ]);
     }

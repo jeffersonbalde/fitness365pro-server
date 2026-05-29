@@ -224,52 +224,11 @@ final class WorkoutJsonPresenter
 
     public static function extractWorkoutPhotoRelativePath(?string $url): ?string
     {
-        $trimmed = trim((string) $url);
-        if ($trimmed === '') {
-            return null;
-        }
-
-        $path = parse_url($trimmed, PHP_URL_PATH);
-        if (! is_string($path) || $path === '') {
-            $path = $trimmed;
-        }
-
-        $path = ltrim($path, '/');
-        $storagePrefix = 'storage/';
-        $mediaPrefix = 'api/v1/profile/media/';
-
-        if (str_starts_with($path, $storagePrefix)) {
-            $path = substr($path, strlen($storagePrefix));
-        } elseif (str_starts_with($path, $mediaPrefix)) {
-            $path = substr($path, strlen($mediaPrefix));
-        }
-
-        $path = rawurldecode($path);
-
-        return str_starts_with($path, 'workout-photos/') ? $path : null;
+        return PublicUploadStorage::extractRelativePath($url, ['workout-photos']);
     }
 
     public static function resolveWorkoutImageUrl($url): string
     {
-        if (! is_string($url) || trim($url) === '') {
-            return '';
-        }
-
-        $relativePath = self::extractWorkoutPhotoRelativePath($url);
-        if ($relativePath) {
-            $encodedPath = collect(explode('/', $relativePath))
-                ->map(fn ($segment) => rawurlencode($segment))
-                ->implode('/');
-
-            // Relative path — client resolves against VITE_LARAVEL_API origin (works on DO subpaths).
-            return "/api/v1/profile/media/{$encodedPath}";
-        }
-
-        // Legacy absolute URL that already points at API media — strip host, keep path.
-        if (preg_match('#/api/v1/profile/media/(.+)$#i', $url, $matches)) {
-            return '/api/v1/profile/media/'.$matches[1];
-        }
-
-        return trim($url);
+        return PublicUploadStorage::resolveForClient(is_string($url) ? $url : '');
     }
 }

@@ -6,48 +6,65 @@ use App\Models\ClientAdminEventRegistration;
 use App\Models\ClientAdminEventRunningSelection;
 use App\Models\CommunityMember;
 use App\Models\WorkoutLog;
-use App\Services\EventEnrollmentProgressService;
-use App\Services\EventProgressSubmissionService;
 use Illuminate\Support\Facades\Schema;
 
 class WorkoutStatsService
 {
+    private static ?bool $registrationsTableReady = null;
+
+    private static ?bool $progressColumnReady = null;
+
+    private static ?bool $runningSelectionsTableReady = null;
+
+    private static ?bool $mileageChallengeColumnReady = null;
+
     /**
      * Same shape as WorkoutController::stats "data" payload (no HTTP wrapper).
      */
     public function buildPayloadForClient(string $clientId): array
     {
-        $completedQuery = WorkoutLog::query()
+        $weekStart = now()->startOfWeek()->toDateString();
+        $weekEnd = now()->endOfWeek()->toDateString();
+
+        $aggregates = WorkoutLog::query()
             ->where('client_id', $clientId)
-            ->where('status', 'completed');
-
-        $totalWorkouts = (clone $completedQuery)->count();
-
-        $thisWeek = (clone $completedQuery)
-            ->whereBetween('workout_date', [
-                now()->startOfWeek()->toDateString(),
-                now()->endOfWeek()->toDateString(),
-            ])
-            ->count();
-
-        $runQuery = (clone $completedQuery)
-            ->where('entry_type', 'workout')
-            ->whereNotNull('distance_km')
-            ->where('distance_km', '>', 0);
-
-        $totalRuns = (clone $runQuery)->count();
-        $streak = $this->calculateStreak($clientId);
-        $totalDistance = (clone $runQuery)->sum('distance_km');
-
-        $paceAgg = (clone $runQuery)
-            ->whereNotNull('pace_min_per_km')
-            ->selectRaw('sum(pace_min_per_km * distance_km) as weighted_pace_sum, sum(distance_km) as distance_sum')
+            ->where('status', 'completed')
+            ->selectRaw('COUNT(*) as total_workouts')
+            ->selectRaw(
+                'SUM(CASE WHEN workout_date BETWEEN ? AND ? THEN 1 ELSE 0 END) as this_week',
+                [$weekStart, $weekEnd]
+            )
+            ->selectRaw(
+                'SUM(CASE WHEN entry_type = ? AND distance_km IS NOT NULL AND distance_km > 0 THEN 1 ELSE 0 END) as total_runs',
+                ['workout']
+            )
+            ->selectRaw(
+                'SUM(CASE WHEN entry_type = ? AND distance_km IS NOT NULL AND distance_km > 0 THEN distance_km ELSE 0 END) as total_distance_km',
+                ['workout']
+            )
+            ->selectRaw(
+                'SUM(CASE WHEN entry_type = ? AND distance_km IS NOT NULL AND distance_km > 0 AND pace_min_per_km IS NOT NULL THEN pace_min_per_km * distance_km ELSE 0 END) as weighted_pace_sum',
+                ['workout']
+            )
+            ->selectRaw(
+                'SUM(CASE WHEN entry_type = ? AND distance_km IS NOT NULL AND distance_km > 0 AND pace_min_per_km IS NOT NULL THEN distance_km ELSE 0 END) as pace_distance_sum',
+                ['workout']
+            )
             ->first();
 
+        $totalWorkouts = (int) ($aggregates->total_workouts ?? 0);
+        $thisWeek = (int) ($aggregates->this_week ?? 0);
+        $totalRuns = (int) ($aggregates->total_runs ?? 0);
+        $totalDistance = (float) ($aggregates->total_distance_km ?? 0);
+        $paceDistanceSum = (float) ($aggregates->pace_distance_sum ?? 0);
+        $weightedPaceSum = (float) ($aggregates->weighted_pace_sum ?? 0);
+
         $avgPace = null;
-        if ($paceAgg && (float) $paceAgg->distance_sum > 0) {
-            $avgPace = round((float) ($paceAgg->weighted_pace_sum / $paceAgg->distance_sum), 2);
+        if ($paceDistanceSum > 0) {
+            $avgPace = round($weightedPaceSum / $paceDistanceSum, 2);
         }
+
+        $snapshots = $this->challengeSnapshotsForClient($clientId, 48);
 
         $joinedRaceMembers = CommunityMember::query()
             ->where('client_id', $clientId)
@@ -66,7 +83,7 @@ class WorkoutStatsService
         $joinedRaces = $joinedRaceMembers
             ->map(function (CommunityMember $membership) {
                 $community = $membership->community;
-                if (!$community) {
+                if (! $community) {
                     return null;
                 }
 
@@ -86,31 +103,30 @@ class WorkoutStatsService
         return [
             'total_workouts' => $totalWorkouts,
             'this_week' => $thisWeek,
-            'current_streak' => $streak,
-            'total_distance_km' => round((float) $totalDistance, 2),
+            'current_streak' => $this->calculateStreak($clientId),
+            'total_distance_km' => round($totalDistance, 2),
             'total_runs' => $totalRuns,
             'avg_pace_min_per_km' => $avgPace,
             'badges' => [],
             'trophies' => [],
-            /** CMS event badges (with artwork) unlocked when enrolled challenge reaches 100% progress. */
-            'event_badges' => $this->buildEarnedEventBadges($clientId),
+            'event_badges' => $this->buildEarnedEventBadgesFromSnapshots($snapshots),
             'joined_races' => $joinedRaces,
-            'joined_challenge_events' => $this->buildJoinedChallengeEventsFromSnapshots($this->challengeSnapshotsForClient($clientId, 12)),
+            'joined_challenge_events' => $this->buildJoinedChallengeEventsFromSnapshots(
+                array_slice($snapshots, 0, 12)
+            ),
         ];
     }
 
     /**
-     * Image-capable badges from admin events whose distance goal has been fully completed.
-     *
+     * @param  list<array<string, mixed>>  $snapshots
      * @return list<array{id: string, event_id: string, event_title: string, badge_key: string, title: string, image_url: string}>
      */
-    private function buildEarnedEventBadges(string $clientId): array
+    private function buildEarnedEventBadgesFromSnapshots(array $snapshots): array
     {
-        if (! Schema::hasTable('client_admin_event_registrations')) {
+        if (! $this->registrationsTableReady()) {
             return [];
         }
 
-        $snapshots = $this->challengeSnapshotsForClient($clientId, 48);
         $out = [];
         $seenFingerprints = [];
 
@@ -154,7 +170,7 @@ class WorkoutStatsService
     {
         $normalizedKey = $this->normalizeBadgeKeyForLookup($badgeKey);
 
-        foreach ($this->buildEarnedEventBadges($clientId) as $badge) {
+        foreach ($this->buildEarnedEventBadgesFromSnapshots($this->challengeSnapshotsForClient($clientId, 48)) as $badge) {
             if ((string) ($badge['event_id'] ?? '') !== (string) $eventId) {
                 continue;
             }
@@ -209,10 +225,7 @@ class WorkoutStatsService
             ];
         }
 
-        /** De-dupe by image URL within same event badge list */
         $seenUrls = [];
-
-        /** @var list<array{badge_key: string, title: string, image_url: string}> $uniq */
         $uniq = [];
         foreach ($rows as $row) {
             $u = strtolower(trim($row['image_url']));
@@ -241,7 +254,6 @@ class WorkoutStatsService
             $pace = $snap['pace'];
             $targetLabel = $snap['targetLabel'];
 
-            /** @var array<int, mixed>|mixed $badgeRaw */
             $badgeRaw = $event->badges;
             $badgesOut = [];
             if (is_array($badgeRaw)) {
@@ -252,7 +264,7 @@ class WorkoutStatsService
                 }
             }
 
-            $challengeKm = Schema::hasColumn('admin_events', 'mileage_challenge_km')
+            $challengeKm = $this->mileageChallengeColumnReady()
                 && $event->mileage_challenge_km !== null
                 ? (float) $event->mileage_challenge_km
                 : null;
@@ -282,29 +294,15 @@ class WorkoutStatsService
     }
 
     /**
-     * Snapshot of one registration + derived progress metrics (matches joined-event card payload logic).
-     *
-     * @return list<array{
-     *     event: \App\Models\AdminEvent,
-     *     logged: float,
-     *     goal: float|null,
-     *     pace: float|null,
-     *     targetLabel: string|null,
-     *     percent: float|null,
-     *     reg_updated_at: string|null,
-     *     submission_status: string,
-     *     pending_queue_km: float,
-     *     pending_submissions_count: int,
-     *     client_id: string,
-     * }>
+     * @return list<array<string, mixed>>
      */
     private function challengeSnapshotsForClient(string $clientId, int $limit): array
     {
-        if (! Schema::hasTable('client_admin_event_registrations')) {
+        if (! $this->registrationsTableReady()) {
             return [];
         }
 
-        $progReady = Schema::hasColumn('client_admin_event_registrations', 'progress_logged_km');
+        $progReady = $this->progressColumnReady();
 
         $regs = ClientAdminEventRegistration::query()
             ->where('client_id', $clientId)
@@ -320,6 +318,22 @@ class WorkoutStatsService
             ->limit($limit)
             ->get();
 
+        if ($regs->isEmpty()) {
+            return [];
+        }
+
+        $eventIds = $regs->pluck('admin_event_id')->map(fn ($id) => (string) $id)->unique()->values()->all();
+        $pendingByEventId = EventProgressSubmissionService::pendingSummaryForClientEvents($clientId, $eventIds);
+
+        $selectionsByEventId = collect();
+        if ($this->runningSelectionsTableReady()) {
+            $selectionsByEventId = ClientAdminEventRunningSelection::query()
+                ->where('client_id', $clientId)
+                ->whereIn('admin_event_id', $eventIds)
+                ->get()
+                ->keyBy(static fn ($row) => (string) $row->admin_event_id);
+        }
+
         $snapshots = [];
 
         foreach ($regs as $reg) {
@@ -330,19 +344,19 @@ class WorkoutStatsService
 
             $goal = ($progReady && $reg->progress_goal_km !== null) ? (float) $reg->progress_goal_km : null;
             $logged = $progReady ? (float) ($reg->progress_logged_km ?? 0) : 0.0;
-            $pace = ($progReady && $reg->progress_pace_min_per_km !== null) ? round((float) $reg->progress_pace_min_per_km, 4) : null;
+            $pace = ($progReady && $reg->progress_pace_min_per_km !== null)
+                ? round((float) $reg->progress_pace_min_per_km, 4)
+                : null;
 
             $targetLabel = $progReady && is_string($reg->progress_target_label) && trim($reg->progress_target_label) !== ''
                 ? trim($reg->progress_target_label)
                 : null;
 
-            if (($goal === null || $goal <= 0) && strtolower((string) $event->category) === 'running' && Schema::hasTable('client_admin_event_running_selections')) {
-                $sel = ClientAdminEventRunningSelection::query()
-                    ->where('client_id', $clientId)
-                    ->where('admin_event_id', $event->id)
-                    ->first();
+            if (($goal === null || $goal <= 0)
+                && strtolower((string) $event->category) === 'running') {
+                $sel = $selectionsByEventId->get((string) $event->id);
                 if ($sel) {
-                    $eventChallenge = Schema::hasColumn('admin_events', 'mileage_challenge_km')
+                    $eventChallenge = $this->mileageChallengeColumnReady()
                         ? (float) ($event->mileage_challenge_km ?? 0)
                         : 0.0;
                     $dkm = EventEnrollmentProgressService::distanceKeyToKm(
@@ -370,12 +384,7 @@ class WorkoutStatsService
             }
 
             $eventIdStr = (string) $event->id;
-            $pendingKm = EventProgressSubmissionService::tableReady()
-                ? EventProgressSubmissionService::sumPendingDeltaKm((string) $clientId, $eventIdStr)
-                : 0.0;
-            $pendingCt = EventProgressSubmissionService::tableReady()
-                ? EventProgressSubmissionService::pendingCountForClientEvent((string) $clientId, $eventIdStr)
-                : 0;
+            $pending = $pendingByEventId[$eventIdStr] ?? ['pending_km' => 0.0, 'pending_count' => 0];
 
             $snapshots[] = [
                 'event' => $event,
@@ -386,8 +395,8 @@ class WorkoutStatsService
                 'percent' => $percent,
                 'reg_updated_at' => $reg->updated_at?->toISOString(),
                 'submission_status' => $progReady ? (string) ($reg->progress_submission_status ?? 'none') : 'none',
-                'pending_queue_km' => $pendingKm,
-                'pending_submissions_count' => $pendingCt,
+                'pending_queue_km' => (float) $pending['pending_km'],
+                'pending_submissions_count' => (int) $pending['pending_count'],
                 'client_id' => $clientId,
             ];
         }
@@ -397,26 +406,57 @@ class WorkoutStatsService
 
     private function calculateStreak(string $clientId): int
     {
+        $dates = WorkoutLog::query()
+            ->where('client_id', $clientId)
+            ->where('status', 'completed')
+            ->where('entry_type', 'workout')
+            ->whereNotNull('distance_km')
+            ->where('distance_km', '>', 0)
+            ->orderByDesc('workout_date')
+            ->limit(400)
+            ->pluck('workout_date')
+            ->map(fn ($d) => $d instanceof \DateTimeInterface ? $d->format('Y-m-d') : (string) $d)
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($dates === []) {
+            return 0;
+        }
+
+        $dateSet = array_fill_keys($dates, true);
         $streak = 0;
-        $date = now()->toDateString();
+        $cursor = now()->toDateString();
 
-        while (true) {
-            $workout = WorkoutLog::where('client_id', $clientId)
-                ->whereDate('workout_date', $date)
-                ->where('status', 'completed')
-                ->where('entry_type', 'workout')
-                ->whereNotNull('distance_km')
-                ->where('distance_km', '>', 0)
-                ->first();
+        if (! isset($dateSet[$cursor])) {
+            $cursor = now()->subDay()->toDateString();
+        }
 
-            if ($workout) {
-                $streak++;
-                $date = date('Y-m-d', strtotime($date . ' -1 day'));
-            } else {
-                break;
-            }
+        while (isset($dateSet[$cursor])) {
+            $streak++;
+            $cursor = date('Y-m-d', strtotime($cursor.' -1 day'));
         }
 
         return $streak;
+    }
+
+    private function registrationsTableReady(): bool
+    {
+        return self::$registrationsTableReady ??= Schema::hasTable('client_admin_event_registrations');
+    }
+
+    private function progressColumnReady(): bool
+    {
+        return self::$progressColumnReady ??= Schema::hasColumn('client_admin_event_registrations', 'progress_logged_km');
+    }
+
+    private function runningSelectionsTableReady(): bool
+    {
+        return self::$runningSelectionsTableReady ??= Schema::hasTable('client_admin_event_running_selections');
+    }
+
+    private function mileageChallengeColumnReady(): bool
+    {
+        return self::$mileageChallengeColumnReady ??= Schema::hasColumn('admin_events', 'mileage_challenge_km');
     }
 }

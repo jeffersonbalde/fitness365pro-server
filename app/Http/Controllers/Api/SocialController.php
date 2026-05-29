@@ -341,7 +341,7 @@ class SocialController extends Controller
             ->whereNotIn('id', $followingIds)
             ->with(['profile', 'goals:id,slug']);
 
-        $candidates = $candidateQuery->limit(250)->get();
+        $candidates = $candidateQuery->limit(60)->get();
         $scored = $this->buddyScoringService->scoreCandidates($client, $candidates);
 
         $total = $scored->count();

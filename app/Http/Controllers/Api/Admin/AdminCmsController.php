@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AdminAnnouncement;
 use App\Models\AdminEvent;
 use App\Models\AdminPost;
+use App\Support\PublicUploadStorage;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
@@ -17,6 +18,25 @@ use Illuminate\Support\Str;
 class AdminCmsController extends Controller
 {
     use LogsAdminActivity;
+
+    private function hydrateAdminEventMediaUrls(AdminEvent $event): AdminEvent
+    {
+        $event->image_url = PublicUploadStorage::resolveForClient($event->image_url);
+
+        $badges = $event->badges;
+        if (is_array($badges)) {
+            $event->badges = array_map(function ($row) {
+                if (!is_array($row)) {
+                    return $row;
+                }
+                $row['image_url'] = PublicUploadStorage::resolveForClient($row['image_url'] ?? '');
+
+                return $row;
+            }, $badges);
+        }
+
+        return $event;
+    }
 
     private function sanitizeEventBadgesInput(Request $request): array
     {
@@ -848,6 +868,8 @@ class AdminCmsController extends Controller
         }
 
         $items = $query->paginate((int) $request->input('per_page', 15));
+        $items->getCollection()->transform(fn (AdminEvent $event) => $this->hydrateAdminEventMediaUrls($event));
+
         return response()->json(['success' => true, 'data' => $items]);
     }
 
@@ -929,7 +951,12 @@ class AdminCmsController extends Controller
         ]);
 
         $this->logAdminActivity($request, 'admin_event_created', 'admin_event', $event->id, ['title' => $event->title]);
-        return response()->json(['success' => true, 'message' => 'Event created successfully', 'data' => ['event' => $event]], 201);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Event created successfully',
+            'data' => ['event' => $this->hydrateAdminEventMediaUrls($event)],
+        ], 201);
     }
 
     public function updateEvent(Request $request, string $id)
@@ -1014,7 +1041,12 @@ class AdminCmsController extends Controller
         $event->save();
 
         $this->logAdminActivity($request, 'admin_event_updated', 'admin_event', $event->id, ['status' => $event->status]);
-        return response()->json(['success' => true, 'message' => 'Event updated successfully', 'data' => ['event' => $event]]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Event updated successfully',
+            'data' => ['event' => $this->hydrateAdminEventMediaUrls($event)],
+        ]);
     }
 
     public function deleteEvent(Request $request, string $id)
@@ -1044,13 +1076,12 @@ class AdminCmsController extends Controller
             return response()->json(['success' => false, 'errors' => $validator->errors(), 'message' => 'Validation failed'], 422);
         }
 
-        $path = $request->file('image')->store('admin-events', 'public');
-        $url = '/storage/' . $path;
+        $path = PublicUploadStorage::storePublicReference($request->file('image'), 'admin-events');
 
         return response()->json([
             'success' => true,
             'message' => 'Event image uploaded successfully.',
-            'data' => ['image_url' => $url],
+            'data' => ['image_url' => PublicUploadStorage::resolveForClient($path)],
         ], 201);
     }
 
@@ -1067,13 +1098,12 @@ class AdminCmsController extends Controller
             return response()->json(['success' => false, 'errors' => $validator->errors(), 'message' => 'Validation failed'], 422);
         }
 
-        $path = $request->file('image')->store('admin-event-badges', 'public');
-        $url = '/storage/' . $path;
+        $path = PublicUploadStorage::storePublicReference($request->file('image'), 'admin-event-badges');
 
         return response()->json([
             'success' => true,
             'message' => 'Badge image uploaded successfully.',
-            'data' => ['image_url' => $url],
+            'data' => ['image_url' => PublicUploadStorage::resolveForClient($path)],
         ], 201);
     }
 }

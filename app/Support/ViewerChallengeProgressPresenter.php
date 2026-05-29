@@ -18,6 +18,33 @@ final class ViewerChallengeProgressPresenter
      */
     public static function slice(AdminEvent $event, ?ClientAdminEventRegistration $reg, string $clientId): ?array
     {
+        return self::sliceInternal($event, $reg, $clientId, syncGoals: true);
+    }
+
+    /**
+     * Read-only progress slice for list endpoints (no DB writes or refresh).
+     *
+     * @param  array<string, array{pending_km: float, pending_count: int}>|null  $pendingByEventId
+     */
+    public static function sliceReadOnly(
+        AdminEvent $event,
+        ?ClientAdminEventRegistration $reg,
+        string $clientId,
+        ?array $pendingByEventId = null,
+    ): ?array {
+        return self::sliceInternal($event, $reg, $clientId, syncGoals: false, pendingByEventId: $pendingByEventId);
+    }
+
+    /**
+     * @param  array<string, array{pending_km: float, pending_count: int}>|null  $pendingByEventId
+     */
+    private static function sliceInternal(
+        AdminEvent $event,
+        ?ClientAdminEventRegistration $reg,
+        string $clientId,
+        bool $syncGoals,
+        ?array $pendingByEventId = null,
+    ): ?array {
         if (! $reg || strtolower((string) ($reg->registration_status ?? '')) !== 'confirmed') {
             return null;
         }
@@ -25,8 +52,10 @@ final class ViewerChallengeProgressPresenter
             return null;
         }
 
-        EventEnrollmentProgressService::syncRegistrationGoals($event, $reg, $clientId);
-        $reg->refresh();
+        if ($syncGoals) {
+            EventEnrollmentProgressService::syncRegistrationGoals($event, $reg, $clientId);
+            $reg->refresh();
+        }
 
         $goal = $reg->progress_goal_km !== null ? (float) $reg->progress_goal_km : null;
         $logged = (float) ($reg->progress_logged_km ?? 0);
@@ -55,13 +84,37 @@ final class ViewerChallengeProgressPresenter
             'pace_min_per_km' => $reg->progress_pace_min_per_km !== null ? (float) $reg->progress_pace_min_per_km : null,
             'submission_status' => (string) ($reg->progress_submission_status ?? 'none'),
             'mileage_challenge_km' => ($challengeKm !== null && $challengeKm > 0) ? round($challengeKm, 4) : null,
-            'pending_queue_km' => EventProgressSubmissionService::tableReady()
-                ? round(EventProgressSubmissionService::sumPendingDeltaKm($clientId, (string) $event->id), 4)
-                : 0.0,
-            'pending_submissions_count' => EventProgressSubmissionService::tableReady()
-                ? EventProgressSubmissionService::pendingCountForClientEvent($clientId, (string) $event->id)
-                : 0,
+            'pending_queue_km' => self::pendingKmForEvent($clientId, (string) $event->id, $pendingByEventId),
+            'pending_submissions_count' => self::pendingCountForEvent($clientId, (string) $event->id, $pendingByEventId),
         ];
+    }
+
+    /**
+     * @param  array<string, array{pending_km: float, pending_count: int}>|null  $pendingByEventId
+     */
+    private static function pendingKmForEvent(string $clientId, string $eventId, ?array $pendingByEventId): float
+    {
+        if ($pendingByEventId !== null) {
+            return round((float) ($pendingByEventId[$eventId]['pending_km'] ?? 0), 4);
+        }
+
+        return EventProgressSubmissionService::tableReady()
+            ? round(EventProgressSubmissionService::sumPendingDeltaKm($clientId, $eventId), 4)
+            : 0.0;
+    }
+
+    /**
+     * @param  array<string, array{pending_km: float, pending_count: int}>|null  $pendingByEventId
+     */
+    private static function pendingCountForEvent(string $clientId, string $eventId, ?array $pendingByEventId): int
+    {
+        if ($pendingByEventId !== null) {
+            return (int) ($pendingByEventId[$eventId]['pending_count'] ?? 0);
+        }
+
+        return EventProgressSubmissionService::tableReady()
+            ? EventProgressSubmissionService::pendingCountForClientEvent($clientId, $eventId)
+            : 0;
     }
 
     /**

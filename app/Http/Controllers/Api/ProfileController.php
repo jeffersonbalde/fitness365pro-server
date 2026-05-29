@@ -9,10 +9,10 @@ use App\Models\ClientAdminEventRegistration;
 use App\Models\ClientBadge;
 use App\Models\ClientProfile;
 use App\Models\WorkoutLog;
+use App\Support\PublicUploadStorage;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Response;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Schema;
 
@@ -38,51 +38,12 @@ class ProfileController extends Controller
 
     private function deletePublicFileByUrl(?string $url, array $allowedDirectories = []): void
     {
-        if (!$url) {
-            return;
-        }
-
-        $path = parse_url($url, PHP_URL_PATH);
-        if (!$path) {
-            return;
-        }
-
-        $storagePrefix = '/storage/';
-        if (str_starts_with($path, $storagePrefix)) {
-            $relativePath = substr($path, strlen($storagePrefix));
-            if ($relativePath) {
-                if (!empty($allowedDirectories)) {
-                    $isAllowed = false;
-                    foreach ($allowedDirectories as $directory) {
-                        if (str_starts_with($relativePath, trim($directory, '/') . '/')) {
-                            $isAllowed = true;
-                            break;
-                        }
-                    }
-                    if (!$isAllowed) {
-                        return;
-                    }
-                }
-                Storage::disk('public')->delete($relativePath);
-            }
-        }
+        PublicUploadStorage::deleteByUrl($url, $allowedDirectories ?: null);
     }
 
     private function normalizePublicMediaUrl(?string $url): ?string
     {
-        if (!$url || !is_string($url)) {
-            return $url;
-        }
-
-        // Convert legacy /storage/... URLs to API-served media URLs.
-        if (str_starts_with($url, '/storage/')) {
-            $relativePath = ltrim(substr($url, strlen('/storage/')), '/');
-            if ($relativePath !== '') {
-                return '/api/v1/profile/media/' . $relativePath;
-            }
-        }
-
-        return $url;
+        return PublicUploadStorage::normalizePublicUrl($url);
     }
 
     private function profilePayload(ClientProfile $profile): ClientProfile
@@ -145,7 +106,9 @@ class ProfileController extends Controller
         $allowed = str_starts_with($normalizedPath, 'profile-pictures/')
             || str_starts_with($normalizedPath, 'cover-photos/')
             || str_starts_with($normalizedPath, 'workout-photos/')
-            || str_starts_with($normalizedPath, 'profile-badges/');
+            || str_starts_with($normalizedPath, 'profile-badges/')
+            || str_starts_with($normalizedPath, 'admin-events/')
+            || str_starts_with($normalizedPath, 'admin-event-badges/');
         if (!$allowed) {
             return response()->json([
                 'success' => false,
@@ -153,14 +116,20 @@ class ProfileController extends Controller
             ], 403);
         }
 
-        if (!Storage::disk('public')->exists($normalizedPath)) {
+        if (!PublicUploadStorage::disk()->exists($normalizedPath)) {
             return response()->json([
                 'success' => false,
                 'message' => 'Media not found.',
             ], 404);
         }
 
-        $disk = Storage::disk('public');
+        if (PublicUploadStorage::isRemote()) {
+            return redirect(PublicUploadStorage::publicUrl($normalizedPath), 302, [
+                'Cache-Control' => 'public, max-age=86400',
+            ]);
+        }
+
+        $disk = PublicUploadStorage::disk();
         $absolutePath = $disk->path($normalizedPath);
         $mimeType = @mime_content_type($absolutePath) ?: 'application/octet-stream';
 
@@ -348,10 +317,10 @@ class ProfileController extends Controller
         }
 
         $this->deletePublicFileByUrl($profile->profile_picture_url, ['profile-pictures']);
-        $storedPath = $request->file('profile_picture')->store('profile-pictures', 'public');
+        $storedPath = PublicUploadStorage::store($request->file('profile_picture'), 'profile-pictures');
 
         $profile->update([
-            'profile_picture_url' => '/api/v1/profile/media/' . $storedPath,
+            'profile_picture_url' => PublicUploadStorage::publicUrl($storedPath),
         ]);
 
         return response()->json([
@@ -388,10 +357,10 @@ class ProfileController extends Controller
         }
 
         $this->deletePublicFileByUrl($profile->cover_photo_url, ['cover-photos']);
-        $storedPath = $request->file('cover_photo')->store('cover-photos', 'public');
+        $storedPath = PublicUploadStorage::store($request->file('cover_photo'), 'cover-photos');
 
         $profile->update([
-            'cover_photo_url' => '/api/v1/profile/media/' . $storedPath,
+            'cover_photo_url' => PublicUploadStorage::publicUrl($storedPath),
         ]);
 
         return response()->json([

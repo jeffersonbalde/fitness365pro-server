@@ -29,6 +29,12 @@ class WorkoutController extends Controller
     ) {
     }
 
+    private function forgetWorkoutStatsCache(string $clientId): void
+    {
+        cache()->forget('workout_stats:'.$clientId);
+        cache()->forget('cms_events:list:'.$clientId);
+    }
+
     private function mapClientSummary(Client $client, ?Client $viewer = null): array
     {
         $profile = $client->profile;
@@ -113,18 +119,7 @@ class WorkoutController extends Controller
 
     private function deleteWorkoutPhotoByUrl(?string $url): void
     {
-        if (!$url || !is_string($url)) {
-            return;
-        }
-
-        $relativePath = WorkoutJsonPresenter::extractWorkoutPhotoRelativePath($url);
-        if (!$relativePath) {
-            return;
-        }
-
-        if (Storage::disk('public')->exists($relativePath)) {
-            Storage::disk('public')->delete($relativePath);
-        }
+        \App\Support\PublicUploadStorage::deleteByUrl($url, ['workout-photos']);
     }
 
     private function validateWorkout(Request $request, bool $isUpdate = false, ?WorkoutLog $existingWorkout = null)
@@ -253,8 +248,7 @@ class WorkoutController extends Controller
         $imageUrls = [];
         if ($request->hasFile('workout_images')) {
             foreach ($request->file('workout_images') as $image) {
-                $storedPath = $image->store('workout-photos', 'public');
-                $imageUrls[] = Storage::url($storedPath);
+                $imageUrls[] = \App\Support\PublicUploadStorage::storePublicReference($image, 'workout-photos');
             }
         }
 
@@ -290,6 +284,8 @@ class WorkoutController extends Controller
         ChallengeEnrollmentProgressService::onWorkoutCreated($fresh);
         $fresh->loadMissing('linkedAdminEvent:id,title');
         $fresh->loadCount(['likes', 'comments']);
+
+        $this->forgetWorkoutStatsCache((string) $client->id);
 
         return response()->json([
             'success' => true,
@@ -371,8 +367,7 @@ class WorkoutController extends Controller
 
         if ($request->hasFile('workout_images')) {
             foreach ($request->file('workout_images') as $image) {
-                $storedPath = $image->store('workout-photos', 'public');
-                $finalImages[] = Storage::url($storedPath);
+                $finalImages[] = \App\Support\PublicUploadStorage::storePublicReference($image, 'workout-photos');
             }
         }
 
@@ -431,6 +426,8 @@ class WorkoutController extends Controller
         $currentSnapshot?->loadMissing('linkedAdminEvent:id,title');
         $currentSnapshot?->loadCount(['likes', 'comments']);
 
+        $this->forgetWorkoutStatsCache((string) $client->id);
+
         return response()->json([
             'success' => true,
             'message' => 'Workout updated successfully',
@@ -468,6 +465,8 @@ class WorkoutController extends Controller
         }
 
         $workout->delete();
+
+        $this->forgetWorkoutStatsCache((string) $client->id);
 
         return response()->json([
             'success' => true,
@@ -729,10 +728,14 @@ class WorkoutController extends Controller
     public function stats(Request $request)
     {
         $client = $request->user();
+        $clientId = (string) $client->id;
+        $cacheKey = 'workout_stats:'.$clientId;
+
+        $data = cache()->remember($cacheKey, 45, fn () => $this->workoutStatsService->buildPayloadForClient($clientId));
 
         return response()->json([
             'success' => true,
-            'data' => $this->workoutStatsService->buildPayloadForClient((string) $client->id),
+            'data' => $data,
         ], 200);
     }
 
