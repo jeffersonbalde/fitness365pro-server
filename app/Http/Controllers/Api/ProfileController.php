@@ -19,6 +19,18 @@ use Illuminate\Support\Facades\Schema;
 
 class ProfileController extends Controller
 {
+    private function validationErrorResponse($validator)
+    {
+        $errors = $validator->errors()->toArray();
+        $firstError = collect($errors)->flatten()->first();
+
+        return response()->json([
+            'success' => false,
+            'message' => is_string($firstError) && $firstError !== '' ? $firstError : 'Validation failed',
+            'errors' => $errors,
+        ], 422);
+    }
+
     private function deriveOverallExperienceLevel(?string $running, ?string $gym, ?string $others): ?string
     {
         $rank = [
@@ -299,15 +311,11 @@ class ProfileController extends Controller
     public function uploadPicture(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'profile_picture' => ['required', 'file', new ValidProfileImage(10240)],
+            'profile_picture' => ['required', new ValidProfileImage(10240)],
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation failed',
-                'errors' => $validator->errors(),
-            ], 422);
+            return $this->validationErrorResponse($validator);
         }
 
         $client = $request->user();
@@ -339,15 +347,11 @@ class ProfileController extends Controller
     public function uploadCoverPhoto(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'cover_photo' => ['required', 'file', new ValidProfileImage(15360)],
+            'cover_photo' => ['required', new ValidProfileImage(15360)],
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation failed',
-                'errors' => $validator->errors(),
-            ], 422);
+            return $this->validationErrorResponse($validator);
         }
 
         $client = $request->user();
