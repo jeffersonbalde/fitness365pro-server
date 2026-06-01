@@ -148,9 +148,13 @@ class EventRegistrationController extends Controller
                 ->where('client_id', $request->user()->id)
                 ->where('admin_event_id', $event->id)
                 ->first();
+            $packagesOffered = count($this->normalizeRunningPackagesFromDetails($rd)) > 0;
             $pkg = trim((string) ($row?->package_key ?? ''));
-            if (!$row || trim((string) $row->distance_key) === '' || $pkg === '') {
-                return ['Pick a race distance and a package before confirming.'];
+            if (!$row || trim((string) $row->distance_key) === '') {
+                return ['Pick a race distance before confirming.'];
+            }
+            if ($packagesOffered && $pkg === '') {
+                return ['Pick a registration package before confirming.'];
             }
 
             return null;
@@ -167,9 +171,13 @@ class EventRegistrationController extends Controller
                 ->where('client_id', $request->user()->id)
                 ->where('admin_event_id', $event->id)
                 ->first();
+            $packagesOffered = count($this->normalizeGymPackagesFromDetails($gd)) > 0;
             $pkg = trim((string) ($row?->package_key ?? ''));
-            if (!$row || trim((string) $row->program_key) === '' || $pkg === '') {
-                return ['Pick a program focus and membership package before confirming.'];
+            if (!$row || trim((string) $row->program_key) === '') {
+                return ['Pick a program focus before confirming.'];
+            }
+            if ($packagesOffered && $pkg === '') {
+                return ['Pick a membership or pass package before confirming.'];
             }
 
             return null;
@@ -281,6 +289,72 @@ class EventRegistrationController extends Controller
         }
 
         return [];
+    }
+
+    /**
+     * @return list<array{key: string, label?: string, includes_shirt?: bool}>
+     */
+    private function normalizeRunningPackagesFromDetails(array $rd): array
+    {
+        if (isset($rd['packages']) && is_array($rd['packages'])) {
+            return $rd['packages'];
+        }
+
+        $legacy = strtolower(trim((string) ($rd['package'] ?? '')));
+        if ($legacy === 'other' && filled($rd['package_custom'] ?? null)) {
+            return [[
+                'key' => 'other',
+                'label' => (string) $rd['package_custom'],
+                'includes_shirt' => (bool) ($rd['package_includes_shirt'] ?? false),
+            ]];
+        }
+        if (in_array($legacy, ['medal', 'medal_shirt', 'medal_shirt_kit'], true)) {
+            return [['key' => $legacy]];
+        }
+
+        return [];
+    }
+
+    /**
+     * @return list<array{key: string, label?: string, includes_shirt?: bool}>
+     */
+    private function normalizeGymPackagesFromDetails(array $gd): array
+    {
+        if (isset($gd['packages']) && is_array($gd['packages'])) {
+            return $gd['packages'];
+        }
+
+        $legacy = strtolower(trim((string) ($gd['package'] ?? '')));
+        if ($legacy === 'other' && filled($gd['package_custom'] ?? null)) {
+            return [[
+                'key' => 'other',
+                'label' => (string) $gd['package_custom'],
+                'includes_shirt' => (bool) ($gd['package_includes_shirt'] ?? false),
+            ]];
+        }
+        if (in_array($legacy, ['day_pass', 'monthly_access', 'classes_bundle', 'premium_apparel', 'full_kit'], true)) {
+            return [['key' => $legacy]];
+        }
+
+        return [];
+    }
+
+    /** Kit/courier delivery applies only when the event offers a physical registration package. */
+    private function eventRequiresKitDelivery(AdminEvent $event): bool
+    {
+        $cat = strtolower((string) ($event->category ?? ''));
+        if ($cat === 'running') {
+            $rd = $this->runningDetailsOrNull($event);
+
+            return $rd !== null && count($this->normalizeRunningPackagesFromDetails($rd)) > 0;
+        }
+        if ($cat === 'gym') {
+            $gd = $this->gymDetailsOrNull($event);
+
+            return $gd !== null && count($this->normalizeGymPackagesFromDetails($gd)) > 0;
+        }
+
+        return false;
     }
 
     private function gymProgramMatches(array $gymDetails, string $programKey, ?string $programLabel): bool
@@ -653,6 +727,13 @@ class EventRegistrationController extends Controller
             ], 422);
         }
 
+        if (! $this->eventRequiresKitDelivery($event)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This event does not include kit delivery.',
+            ], 422);
+        }
+
         $validator = Validator::make($request->all(), [
             'delivery.area_key' => 'required|string|max:64',
             'delivery.ship_same_as_registration' => 'sometimes|boolean',
@@ -892,6 +973,7 @@ class EventRegistrationController extends Controller
                 'needs_payment_setup' => $this->eventFeePhp($event) > 0 && !$this->maya->configured(),
                 'payment_mock_active' => $this->maya->mocking(),
                 'requires_category_selections' => in_array(strtolower((string) $event->category), ['running', 'gym'], true),
+                'requires_kit_delivery' => $this->eventRequiresKitDelivery($event),
                 'running_selection' => $running,
                 'gym_selection' => $gym,
                 'delivery_areas_catalog' => RegistrationDeliveryCatalog::resolve(
@@ -953,36 +1035,45 @@ class EventRegistrationController extends Controller
             ], 422);
         }
 
-        if (! $this->deliveryBaselineComplete($deliverySnap)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Choose a kit delivery or courier zone.',
-            ], 422);
-        }
-
         $errs = $this->selectionsCompleteFor($request, $event);
         if ($errs !== null) {
             return response()->json(['success' => false, 'message' => $errs[0], 'messages' => $errs], 422);
         }
 
-        $deliveryKey = strtolower(trim((string) ($deliverySnap['area_key'] ?? '')));
-
-        $src = $event->delivery_areas;
-        if ($src instanceof \Illuminate\Support\Collection) {
-            $src = $src->toArray();
-        }
-        $expectedFee = RegistrationDeliveryCatalog::feeByKey(is_array($src) ? $src : null, $deliveryKey);
-
-        if ($expectedFee === null) {
-            return response()->json(['success' => false, 'message' => 'Stored delivery zone is invalid. Refresh and try again.'], 422);
-        }
-
-        if ($reg->delivery_fee_snapshot === null || round((float) $reg->delivery_fee_snapshot, 2) !== round((float) $expectedFee, 2)) {
-            return response()->json(['success' => false, 'message' => 'Delivery fee is stale. Reload this page before confirming.'], 422);
-        }
-
+        $requiresKitDelivery = $this->eventRequiresKitDelivery($event);
         $baseAmount = round($this->eventFeePhp($event), 2);
-        $deliveryAmt = round((float) $reg->delivery_fee_snapshot, 2);
+
+        if ($requiresKitDelivery) {
+            if (! $this->deliveryBaselineComplete($deliverySnap)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Choose a kit delivery or courier zone.',
+                ], 422);
+            }
+
+            $deliveryKey = strtolower(trim((string) ($deliverySnap['area_key'] ?? '')));
+
+            $src = $event->delivery_areas;
+            if ($src instanceof \Illuminate\Support\Collection) {
+                $src = $src->toArray();
+            }
+            $expectedFee = RegistrationDeliveryCatalog::feeByKey(is_array($src) ? $src : null, $deliveryKey);
+
+            if ($expectedFee === null) {
+                return response()->json(['success' => false, 'message' => 'Stored delivery zone is invalid. Refresh and try again.'], 422);
+            }
+
+            if ($reg->delivery_fee_snapshot === null || round((float) $reg->delivery_fee_snapshot, 2) !== round((float) $expectedFee, 2)) {
+                return response()->json(['success' => false, 'message' => 'Delivery fee is stale. Reload this page before confirming.'], 422);
+            }
+
+            $deliveryAmt = round((float) $reg->delivery_fee_snapshot, 2);
+        } else {
+            $reg->delivery_details = null;
+            $reg->delivery_fee_snapshot = 0;
+            $deliveryAmt = 0.0;
+        }
+
         $amount = round($baseAmount + $deliveryAmt, 2);
         $requiresGateway = $amount > 0.00001;
 

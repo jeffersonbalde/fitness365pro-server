@@ -23,24 +23,45 @@ class AdminCmsController extends Controller
     {
         $event->image_url = PublicUploadStorage::resolveForClient($event->image_url);
 
-        $badges = $event->badges;
-        if (is_array($badges)) {
-            $event->badges = array_map(function ($row) {
-                if (!is_array($row)) {
-                    return $row;
-                }
-                $row['image_url'] = PublicUploadStorage::resolveForClient($row['image_url'] ?? '');
-
-                return $row;
-            }, $badges);
-        }
+        $event->badges = $this->hydrateEventRewardRows($event->badges);
+        $event->trophies = $this->hydrateEventRewardRows($event->trophies);
 
         return $event;
     }
 
+    /**
+     * @param  mixed  $rows
+     * @return mixed
+     */
+    private function hydrateEventRewardRows(mixed $rows): mixed
+    {
+        if (!is_array($rows)) {
+            return $rows;
+        }
+
+        return array_map(function ($row) {
+            if (!is_array($row)) {
+                return $row;
+            }
+            $row['image_url'] = PublicUploadStorage::resolveForClient($row['image_url'] ?? '');
+
+            return $row;
+        }, $rows);
+    }
+
     private function sanitizeEventBadgesInput(Request $request): array
     {
-        $input = $request->input('badges', []);
+        return $this->sanitizeEventRewardImagesInput($request, 'badges');
+    }
+
+    private function sanitizeEventTrophiesInput(Request $request): array
+    {
+        return $this->sanitizeEventRewardImagesInput($request, 'trophies');
+    }
+
+    private function sanitizeEventRewardImagesInput(Request $request, string $field): array
+    {
+        $input = $request->input($field, []);
         if (!is_array($input)) {
             return [];
         }
@@ -145,12 +166,65 @@ class AdminCmsController extends Controller
 
     private function assertEventBadgesLabelsPresent(Request $request, \Illuminate\Validation\Validator $v): void
     {
-        $badges = $request->input('badges', []);
-        if (!is_array($badges)) {
+        $this->assertEventRewardLabelsPresent($request, $v, 'badges', 'badge');
+    }
+
+    private function assertEventTrophiesLabelsPresent(Request $request, \Illuminate\Validation\Validator $v): void
+    {
+        $this->assertEventRewardLabelsPresent($request, $v, 'trophies', 'trophy');
+    }
+
+    private function assertTrophyAwardSettingsValid(Request $request, \Illuminate\Validation\Validator $v): void
+    {
+        $trophies = $request->input('trophies', []);
+        $hasTrophies = is_array($trophies) && count(array_filter($trophies, static function ($row) {
+            return is_array($row) && trim((string) ($row['image_url'] ?? '')) !== '';
+        })) > 0;
+
+        if (! $hasTrophies) {
             return;
         }
 
-        foreach ($badges as $i => $row) {
+        $mode = strtolower(trim((string) $request->input('trophy_award_mode', 'all_finishers')));
+        if ($mode === 'top_n') {
+            $topN = $request->input('trophy_top_n');
+            if (! is_numeric($topN) || (int) $topN < 1) {
+                $v->errors()->add('trophy_top_n', 'Enter how many top finishers receive trophies (1–100).');
+            }
+        }
+    }
+
+    /**
+     * @return array{trophy_award_mode: string, trophy_top_n: int}
+     */
+    private function sanitizeTrophyAwardSettings(Request $request): array
+    {
+        $mode = strtolower(trim((string) $request->input('trophy_award_mode', 'all_finishers')));
+        if (! in_array($mode, ['all_finishers', 'top_n'], true)) {
+            $mode = 'all_finishers';
+        }
+
+        $topN = (int) $request->input('trophy_top_n', 10);
+        $topN = max(1, min(100, $topN));
+
+        return [
+            'trophy_award_mode' => $mode,
+            'trophy_top_n' => $topN,
+        ];
+    }
+
+    private function assertEventRewardLabelsPresent(
+        Request $request,
+        \Illuminate\Validation\Validator $v,
+        string $field,
+        string $label
+    ): void {
+        $rows = $request->input($field, []);
+        if (!is_array($rows)) {
+            return;
+        }
+
+        foreach ($rows as $i => $row) {
             if (!is_array($row)) {
                 continue;
             }
@@ -158,7 +232,10 @@ class AdminCmsController extends Controller
             $url = trim((string) ($row['image_url'] ?? ''));
             $title = trim((string) ($row['title'] ?? ''));
             if ($url !== '' && $title === '') {
-                $v->errors()->add('badges.' . $i . '.title', 'Enter a public label for each badge image.');
+                $v->errors()->add(
+                    $field . '.' . $i . '.title',
+                    'Enter a public label for each ' . $label . ' image.'
+                );
             }
         }
     }
@@ -426,7 +503,7 @@ class AdminCmsController extends Controller
             return [['key' => $p]];
         }
 
-        return [['key' => 'medal']];
+        return [];
     }
 
     private function assertRunningDetailsValid(Request $request, \Illuminate\Validation\Validator $validator, string $categoryResolved): void
@@ -437,7 +514,7 @@ class AdminCmsController extends Controller
 
         $rd = $request->input('running_details');
         if (!is_array($rd)) {
-            $validator->errors()->add('running_details', 'Running events require distance and package options.');
+            $validator->errors()->add('running_details', 'Running events require distance options.');
 
             return;
         }
@@ -447,10 +524,6 @@ class AdminCmsController extends Controller
 
         if (count($distances) === 0) {
             $validator->errors()->add('running_details.distances', 'Select at least one race distance to offer.');
-        }
-
-        if (count($packages) === 0) {
-            $validator->errors()->add('running_details.packages', 'Select at least one registration package to offer.');
         }
 
         if ($this->runningPackagesListRequiresShirt($packages)) {
@@ -469,7 +542,7 @@ class AdminCmsController extends Controller
 
         $gd = $request->input('gym_details');
         if (!is_array($gd)) {
-            $validator->errors()->add('gym_details', 'Gym events require program and package options.');
+            $validator->errors()->add('gym_details', 'Gym events require program options.');
 
             return;
         }
@@ -479,10 +552,6 @@ class AdminCmsController extends Controller
 
         if (count($programs) === 0) {
             $validator->errors()->add('gym_details.programs', 'Select at least one program focus to offer.');
-        }
-
-        if (count($packages) === 0) {
-            $validator->errors()->add('gym_details.packages', 'Select at least one membership or pass package to offer.');
         }
 
         if ($this->gymPackagesListRequiresShirt($packages)) {
@@ -584,7 +653,7 @@ class AdminCmsController extends Controller
             return [['key' => $p]];
         }
 
-        return [['key' => 'day_pass']];
+        return [];
     }
 
     /**
@@ -901,6 +970,11 @@ class AdminCmsController extends Controller
             'badges' => 'nullable|array|max:12',
             'badges.*.title' => 'nullable|string|max:120',
             'badges.*.image_url' => 'nullable|string|max:2048',
+            'trophies' => 'nullable|array|max:12',
+            'trophies.*.title' => 'nullable|string|max:120',
+            'trophies.*.image_url' => 'nullable|string|max:2048',
+            'trophy_award_mode' => 'nullable|in:all_finishers,top_n',
+            'trophy_top_n' => 'nullable|integer|min:1|max:100',
             'running_details' => 'nullable|array',
             'gym_details' => 'nullable|array',
             'how_it_works' => 'nullable|array|max:20',
@@ -914,6 +988,8 @@ class AdminCmsController extends Controller
             $this->assertParticipationTextsValid($request, $v, null);
             $this->assertRegistrationWindowOrdered($request, $v, null);
             $this->assertEventBadgesLabelsPresent($request, $v);
+            $this->assertEventTrophiesLabelsPresent($request, $v);
+            $this->assertTrophyAwardSettingsValid($request, $v);
             $this->assertPaidEventFeeValid($request, $v);
         });
         if ($validator->fails()) {
@@ -921,6 +997,8 @@ class AdminCmsController extends Controller
         }
 
         $badges = $this->sanitizeEventBadgesInput($request);
+        $trophies = $this->sanitizeEventTrophiesInput($request);
+        $trophyAward = $this->sanitizeTrophyAwardSettings($request);
         $runningDetails = $this->sanitizeRunningDetailsFromRequest($request, $categoryResolved);
         $gymDetails = $this->sanitizeGymDetailsFromRequest($request, $categoryResolved);
         $participation = $this->finalizedParticipationTexts($request, null);
@@ -931,6 +1009,9 @@ class AdminCmsController extends Controller
             'description' => trim((string) $request->input('description')),
             'image_url' => $request->input('image_url'),
             'badges' => $badges,
+            'trophies' => $trophies,
+            'trophy_award_mode' => $trophyAward['trophy_award_mode'],
+            'trophy_top_n' => $trophyAward['trophy_top_n'],
             'how_it_works' => $participation['how_it_works'],
             'participant_rules' => $participation['participant_rules'],
             'running_details' => $runningDetails,
@@ -992,6 +1073,11 @@ class AdminCmsController extends Controller
             'badges' => 'nullable|array|max:12',
             'badges.*.title' => 'nullable|string|max:120',
             'badges.*.image_url' => 'nullable|string|max:2048',
+            'trophies' => 'nullable|array|max:12',
+            'trophies.*.title' => 'nullable|string|max:120',
+            'trophies.*.image_url' => 'nullable|string|max:2048',
+            'trophy_award_mode' => 'nullable|in:all_finishers,top_n',
+            'trophy_top_n' => 'nullable|integer|min:1|max:100',
             'running_details' => 'nullable|array',
             'gym_details' => 'nullable|array',
             'how_it_works' => 'nullable|array|max:20',
@@ -1005,6 +1091,8 @@ class AdminCmsController extends Controller
             $this->assertParticipationTextsValid($request, $v, $event);
             $this->assertRegistrationWindowOrdered($request, $v, $event);
             $this->assertEventBadgesLabelsPresent($request, $v);
+            $this->assertEventTrophiesLabelsPresent($request, $v);
+            $this->assertTrophyAwardSettingsValid($request, $v);
             $this->assertPaidEventFeeValid($request, $v);
         });
         if ($validator->fails()) {
@@ -1031,6 +1119,14 @@ class AdminCmsController extends Controller
         ]);
         if ($request->has('badges')) {
             $payload['badges'] = $this->sanitizeEventBadgesInput($request);
+        }
+        if ($request->has('trophies')) {
+            $payload['trophies'] = $this->sanitizeEventTrophiesInput($request);
+        }
+        if ($request->has('trophy_award_mode') || $request->has('trophy_top_n')) {
+            $trophyAward = $this->sanitizeTrophyAwardSettings($request);
+            $payload['trophy_award_mode'] = $trophyAward['trophy_award_mode'];
+            $payload['trophy_top_n'] = $trophyAward['trophy_top_n'];
         }
         $payload['running_details'] = $this->sanitizeRunningDetailsFromRequest($request, $categoryResolved);
         $payload['gym_details'] = $this->sanitizeGymDetailsFromRequest($request, $categoryResolved);
@@ -1103,6 +1199,28 @@ class AdminCmsController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Badge image uploaded successfully.',
+            'data' => ['image_url' => PublicUploadStorage::resolveForClient($path)],
+        ], 201);
+    }
+
+    public function uploadEventTrophyImage(Request $request)
+    {
+        if (!Schema::hasTable('admin_events')) {
+            return response()->json(['success' => false, 'message' => 'CMS tables are not migrated yet.'], 409);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'image' => 'required|image|mimes:jpg,jpeg,png,webp,gif|max:4096',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'errors' => $validator->errors(), 'message' => 'Validation failed'], 422);
+        }
+
+        $path = PublicUploadStorage::storePublicReference($request->file('image'), 'admin-event-trophies');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Trophy image uploaded successfully.',
             'data' => ['image_url' => PublicUploadStorage::resolveForClient($path)],
         ], 201);
     }

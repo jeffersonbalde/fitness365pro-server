@@ -88,10 +88,12 @@ class EventGymSelectionController extends Controller
             return response()->json(['success' => false, 'message' => 'This event does not offer gym program or package choices.'], 422);
         }
 
+        $packagesOffered = count($this->normalizePackagesFromDetails($gd)) > 0;
+
         $validator = Validator::make($request->all(), [
             'program_key' => 'required|string|max:24',
             'program_label' => 'nullable|string|max:120',
-            'package_key' => 'required|string|max:32',
+            'package_key' => ($packagesOffered ? 'required' : 'nullable').'|string|max:32',
             'package_label' => 'nullable|string|max:200',
             'package_includes_shirt' => 'nullable|boolean',
             'shirt_size' => 'nullable|string|max:8',
@@ -102,7 +104,7 @@ class EventGymSelectionController extends Controller
 
         $programKey = strtolower(trim((string) $request->input('program_key')));
         $programLabel = $request->filled('program_label') ? Str::limit(trim((string) $request->input('program_label')), 120, '') : null;
-        $packageKey = strtolower(trim((string) $request->input('package_key')));
+        $packageKey = strtolower(trim((string) $request->input('package_key', '')));
         $packageLabel = $request->filled('package_label') ? Str::limit(trim((string) $request->input('package_label')), 200, '') : null;
         $includesShirt = $request->boolean('package_includes_shirt');
         $shirtSize = $request->filled('shirt_size') ? strtoupper(trim((string) $request->input('shirt_size'))) : null;
@@ -111,11 +113,17 @@ class EventGymSelectionController extends Controller
             return response()->json(['success' => false, 'message' => 'The selected program is not offered for this event.'], 422);
         }
 
-        if (!$this->packageMatchesOffer($gd, $packageKey, $packageLabel, $includesShirt)) {
-            return response()->json(['success' => false, 'message' => 'The selected package is not offered for this event.'], 422);
+        if ($packagesOffered) {
+            if (!$this->packageMatchesOffer($gd, $packageKey, $packageLabel, $includesShirt)) {
+                return response()->json(['success' => false, 'message' => 'The selected package is not offered for this event.'], 422);
+            }
+        } else {
+            $packageKey = '';
+            $packageLabel = null;
+            $includesShirt = false;
         }
 
-        $needsShirt = $this->selectionRequiresShirtSize($packageKey, $includesShirt);
+        $needsShirt = $packagesOffered && $this->selectionRequiresShirtSize($packageKey, $includesShirt);
         $allowedSizes = $this->allowedShirtSizes($gd);
         if ($needsShirt) {
             if ($shirtSize === null || $shirtSize === '') {

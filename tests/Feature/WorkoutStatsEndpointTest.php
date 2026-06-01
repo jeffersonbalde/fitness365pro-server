@@ -80,6 +80,7 @@ it('returns workout totals, streak, empty legacy badges, and CMS event badges li
             'badges',
             'trophies',
             'event_badges',
+            'event_trophies',
             'joined_races',
             'joined_challenge_events',
         ],
@@ -88,6 +89,7 @@ it('returns workout totals, streak, empty legacy badges, and CMS event badges li
     expect($response->json('data.badges'))->toEqual([]);
     expect($response->json('data.trophies'))->toEqual([]);
     expect($response->json('data.event_badges'))->toBeArray();
+    expect($response->json('data.event_trophies'))->toBeArray();
 
     expect($response->json('data.total_runs'))->toBe(3);
     expect($response->json('data.current_streak'))->toBeGreaterThanOrEqual(3);

@@ -12,6 +12,7 @@ use App\Models\ClientAdminEventRunningSelection;
 use App\Models\ClientProfile;
 use App\Services\EventEnrollmentProgressService;
 use App\Support\ViewerChallengeProgressPresenter;
+use App\Support\PublicUploadStorage;
 use App\Support\RegistrationDeliveryCatalog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -684,8 +685,9 @@ class PublicCmsController extends Controller
                     'description' => $event->description,
                     'how_it_works' => $event->how_it_works,
                     'participant_rules' => $event->participant_rules,
-                    'image_url' => $event->image_url,
-                    'badges' => $event->badges,
+                    'image_url' => PublicUploadStorage::resolveForClient($event->image_url),
+                    'badges' => $this->hydrateEventRewardMediaRows($event->badges),
+                    'trophies' => $this->hydrateEventRewardMediaRows($event->trophies ?? []),
                     'location' => $event->location,
                     'category' => $event->category,
                     'location_type' => $event->location_type,
@@ -907,6 +909,26 @@ class PublicCmsController extends Controller
                 'total' => $totalInView,
             ],
         ]);
+    }
+
+    /**
+     * @param  mixed  $rows  admin_events.badges or admin_events.trophies JSON
+     * @return list<array<string, mixed>>|null
+     */
+    private function hydrateEventRewardMediaRows(mixed $rows): ?array
+    {
+        if (! is_array($rows)) {
+            return $rows;
+        }
+
+        return array_values(array_map(function ($row) {
+            if (! is_array($row)) {
+                return $row;
+            }
+            $row['image_url'] = PublicUploadStorage::resolveForClient($row['image_url'] ?? '');
+
+            return $row;
+        }, $rows));
     }
 }
 

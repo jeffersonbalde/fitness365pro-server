@@ -190,6 +190,7 @@ Route::prefix('v1')->group(function () {
             Route::get('/events', [AdminCmsController::class, 'events']);
             Route::post('/events/upload-image', [AdminCmsController::class, 'uploadEventImage']);
             Route::post('/events/upload-badge-image', [AdminCmsController::class, 'uploadEventBadgeImage']);
+            Route::post('/events/upload-trophy-image', [AdminCmsController::class, 'uploadEventTrophyImage']);
             Route::post('/events', [AdminCmsController::class, 'createEvent']);
             Route::put('/events/{id}', [AdminCmsController::class, 'updateEvent']);
             Route::delete('/events/{id}', [AdminCmsController::class, 'deleteEvent']);

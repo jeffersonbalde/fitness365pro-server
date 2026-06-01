@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\AdminEvent;
 use App\Models\ClientAdminEventRegistration;
 use App\Models\ClientAdminEventRunningSelection;
 use App\Models\CommunityMember;
@@ -10,7 +11,13 @@ use Illuminate\Support\Facades\Schema;
 
 class WorkoutStatsService
 {
+    public function __construct(
+        private readonly EventFinisherRankService $finisherRankService,
+    ) {}
+
     private static ?bool $registrationsTableReady = null;
+
+    private static ?bool $trophyAwardModeColumnReady = null;
 
     private static ?bool $progressColumnReady = null;
 
@@ -110,6 +117,7 @@ class WorkoutStatsService
             'badges' => [],
             'trophies' => [],
             'event_badges' => $this->buildEarnedEventBadgesFromSnapshots($snapshots),
+            'event_trophies' => $this->buildEarnedEventTrophiesFromSnapshots($snapshots),
             'joined_races' => $joinedRaces,
             'joined_challenge_events' => $this->buildJoinedChallengeEventsFromSnapshots(
                 array_slice($snapshots, 0, 12)
@@ -136,21 +144,21 @@ class WorkoutStatsService
                 continue;
             }
             $event = $snap['event'];
-            foreach ($this->badgeImageCatalogFromEventBadgesRaw($event->badges ?? null) as $badge) {
-                $fp = (string) $event->id.'|'.$badge['badge_key'].'|'.$badge['image_url'];
+            foreach ($this->rewardImageCatalogFromEventRaw($event->badges ?? null, 'badge') as $badge) {
+                $fp = (string) $event->id.'|'.$badge['reward_key'].'|'.$badge['image_url'];
                 if (isset($seenFingerprints[$fp])) {
                     continue;
                 }
                 $seenFingerprints[$fp] = true;
 
                 $safeEvent = preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $event->id);
-                $safeKey = preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $badge['badge_key']);
+                $safeKey = preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $badge['reward_key']);
 
                 $out[] = [
                     'id' => 'eb_'.$safeEvent.'_'.$safeKey,
                     'event_id' => (string) $event->id,
                     'event_title' => (string) ($event->title ?? 'Event'),
-                    'badge_key' => $badge['badge_key'],
+                    'badge_key' => $badge['reward_key'],
                     'title' => $badge['title'],
                     'image_url' => $badge['image_url'],
                     'earned_at' => $snap['reg_updated_at'] ?? null,
@@ -159,6 +167,82 @@ class WorkoutStatsService
         }
 
         return $out;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $snapshots
+     * @return list<array{id: string, event_id: string, event_title: string, trophy_key: string, title: string, image_url: string, earned_at: string|null}>
+     */
+    private function buildEarnedEventTrophiesFromSnapshots(array $snapshots): array
+    {
+        if (! $this->registrationsTableReady()) {
+            return [];
+        }
+
+        $out = [];
+        $seenFingerprints = [];
+
+        foreach ($snapshots as $snap) {
+            $pct = $snap['percent'];
+            if ($pct === null || abs((float) $pct - 100.0) > 1e-3) {
+                continue;
+            }
+            $event = $snap['event'];
+            if (! $this->clientQualifiesForEventTrophies($event, $snap)) {
+                continue;
+            }
+            foreach ($this->rewardImageCatalogFromEventRaw($event->trophies ?? null, 'trophy') as $trophy) {
+                $fp = (string) $event->id.'|'.$trophy['reward_key'].'|'.$trophy['image_url'];
+                if (isset($seenFingerprints[$fp])) {
+                    continue;
+                }
+                $seenFingerprints[$fp] = true;
+
+                $safeEvent = preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $event->id);
+                $safeKey = preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $trophy['reward_key']);
+
+                $out[] = [
+                    'id' => 'et_'.$safeEvent.'_'.$safeKey,
+                    'event_id' => (string) $event->id,
+                    'event_title' => (string) ($event->title ?? 'Event'),
+                    'trophy_key' => $trophy['reward_key'],
+                    'title' => $trophy['title'],
+                    'image_url' => $trophy['image_url'],
+                    'earned_at' => $snap['reg_updated_at'] ?? null,
+                ];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array<string, mixed>  $snap
+     */
+    private function clientQualifiesForEventTrophies(AdminEvent $event, array $snap): bool
+    {
+        if (! $this->trophyAwardModeColumnReady()) {
+            return true;
+        }
+
+        $mode = strtolower(trim((string) ($event->trophy_award_mode ?? 'all_finishers')));
+        if ($mode === '' || $mode === 'all_finishers') {
+            return true;
+        }
+
+        if ($mode !== 'top_n') {
+            return true;
+        }
+
+        $topN = max(1, min(100, (int) ($event->trophy_top_n ?? 10)));
+        $clientId = (string) ($snap['client_id'] ?? '');
+        if ($clientId === '') {
+            return false;
+        }
+
+        $rank = $this->finisherRankService->finisherRankForClient((string) $event->id, $clientId);
+
+        return $rank !== null && $rank <= $topN;
     }
 
     /**
@@ -195,15 +279,17 @@ class WorkoutStatsService
     }
 
     /**
-     * @param  mixed  $raw  admin_events.badges JSON
-     * @return list<array{badge_key: string, title: string, image_url: string}>
+     * @param  mixed  $raw  admin_events.badges or admin_events.trophies JSON
+     * @return list<array{reward_key: string, title: string, image_url: string}>
      */
-    private function badgeImageCatalogFromEventBadgesRaw(mixed $raw): array
+    private function rewardImageCatalogFromEventRaw(mixed $raw, string $keyPrefix = 'badge'): array
     {
         if (! is_array($raw)) {
             return [];
         }
 
+        $prefix = $keyPrefix === 'trophy' ? 'trophy' : 'badge';
+        $defaultTitle = $prefix === 'trophy' ? 'Trophy' : 'Badge';
         $rows = [];
 
         foreach ($raw as $i => $b) {
@@ -216,11 +302,11 @@ class WorkoutStatsService
                 continue;
             }
             $slug = trim((string) ($b['slug'] ?? ''));
-            $key = $slug !== '' ? strtolower($slug) : 'badge_'.(is_int($i) ? $i + 1 : md5($imageUrl.'|'.$title));
+            $key = $slug !== '' ? strtolower($slug) : $prefix.'_'.(is_int($i) ? $i + 1 : md5($imageUrl.'|'.$title));
 
             $rows[] = [
-                'badge_key' => $key,
-                'title' => $title !== '' ? $title : 'Badge',
+                'reward_key' => $key,
+                'title' => $title !== '' ? $title : $defaultTitle,
                 'image_url' => $imageUrl,
             ];
         }
@@ -458,5 +544,10 @@ class WorkoutStatsService
     private function mileageChallengeColumnReady(): bool
     {
         return self::$mileageChallengeColumnReady ??= Schema::hasColumn('admin_events', 'mileage_challenge_km');
+    }
+
+    private function trophyAwardModeColumnReady(): bool
+    {
+        return self::$trophyAwardModeColumnReady ??= Schema::hasColumn('admin_events', 'trophy_award_mode');
     }
 }
