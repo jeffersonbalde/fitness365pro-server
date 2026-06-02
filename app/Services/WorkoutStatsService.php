@@ -107,7 +107,7 @@ class WorkoutStatsService
             ->values()
             ->all();
 
-        return [
+        $payload = [
             'total_workouts' => $totalWorkouts,
             'this_week' => $thisWeek,
             'current_streak' => $this->calculateStreak($clientId),
@@ -123,6 +123,56 @@ class WorkoutStatsService
                 array_slice($snapshots, 0, 12)
             ),
         ];
+
+        // Replace earned badge/trophy images with personalized versions (name overlay).
+        $payload['event_badges'] = $this->attachPersonalizedRewardUrls($clientId, (array) ($payload['event_badges'] ?? []), 'badge');
+        $payload['event_trophies'] = $this->attachPersonalizedRewardUrls($clientId, (array) ($payload['event_trophies'] ?? []), 'trophy');
+
+        return $payload;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     * @return list<array<string, mixed>>
+     */
+    private function attachPersonalizedRewardUrls(string $clientId, array $rows, string $kind): array
+    {
+        $kind = $kind === 'trophy' ? 'trophy' : 'badge';
+        $ext = $this->personalizedRewardExtension();
+
+        $out = [];
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            $eventId = (string) ($row['event_id'] ?? '');
+            $key = $kind === 'trophy'
+                ? (string) ($row['trophy_key'] ?? '')
+                : (string) ($row['badge_key'] ?? '');
+
+            if ($eventId === '' || trim($key) === '') {
+                $out[] = $row;
+                continue;
+            }
+
+            // Keep the original artwork URL for the renderer.
+            $row['base_image_url'] = (string) ($row['image_url'] ?? '');
+
+            // Public, no-auth endpoint. Starts with "/" so client resolveMediaUrl prefixes API origin.
+            $row['image_url'] = sprintf(
+                '/share/reward/%s/%s/%s/%s.%s',
+                rawurlencode($clientId),
+                rawurlencode($eventId),
+                $kind,
+                rawurlencode($key),
+                $ext,
+            );
+
+            $out[] = $row;
+        }
+
+        return $out;
     }
 
     /**
@@ -253,6 +303,7 @@ class WorkoutStatsService
     public function resolvePublicBadgeShare(string $clientId, string $eventId, string $badgeKey): ?array
     {
         $normalizedKey = $this->normalizeBadgeKeyForLookup($badgeKey);
+        $ext = $this->personalizedRewardExtension();
 
         foreach ($this->buildEarnedEventBadgesFromSnapshots($this->challengeSnapshotsForClient($clientId, 48)) as $badge) {
             if ((string) ($badge['event_id'] ?? '') !== (string) $eventId) {
@@ -264,10 +315,64 @@ class WorkoutStatsService
                 continue;
             }
 
+            $badge['base_image_url'] = (string) ($badge['image_url'] ?? '');
+            $badge['image_url'] = sprintf(
+                '/share/reward/%s/%s/badge/%s.%s',
+                rawurlencode($clientId),
+                rawurlencode((string) $eventId),
+                rawurlencode((string) ($badge['badge_key'] ?? $badgeKey)),
+                $ext,
+            );
+
             return $badge;
         }
 
         return null;
+    }
+
+    /**
+     * Resolve a single earned trophy for public share cards.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function resolvePublicTrophyShare(string $clientId, string $eventId, string $trophyKey): ?array
+    {
+        $normalizedKey = $this->normalizeBadgeKeyForLookup($trophyKey);
+        $ext = $this->personalizedRewardExtension();
+
+        foreach ($this->buildEarnedEventTrophiesFromSnapshots($this->challengeSnapshotsForClient($clientId, 48)) as $trophy) {
+            if ((string) ($trophy['event_id'] ?? '') !== (string) $eventId) {
+                continue;
+            }
+
+            $candidateKey = $this->normalizeBadgeKeyForLookup((string) ($trophy['trophy_key'] ?? ''));
+            if ($candidateKey !== $normalizedKey) {
+                continue;
+            }
+
+            $trophy['base_image_url'] = (string) ($trophy['image_url'] ?? '');
+            $trophy['image_url'] = sprintf(
+                '/share/reward/%s/%s/trophy/%s.%s',
+                rawurlencode($clientId),
+                rawurlencode((string) $eventId),
+                rawurlencode((string) ($trophy['trophy_key'] ?? $trophyKey)),
+                $ext,
+            );
+
+            return $trophy;
+        }
+
+        return null;
+    }
+
+    private function personalizedRewardExtension(): string
+    {
+        // If image libs are missing (common in XAMPP), use SVG overlay so the name still shows.
+        if (function_exists('imagecreatefromstring') || class_exists(\Imagick::class)) {
+            return 'png';
+        }
+
+        return 'svg';
     }
 
     private function normalizeBadgeKeyForLookup(string $badgeKey): string
