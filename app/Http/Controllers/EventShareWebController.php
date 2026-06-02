@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\AdminEvent;
+use App\Support\ShareOpenGraph;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\View\View;
@@ -41,13 +42,17 @@ class EventShareWebController extends Controller
             $feeLabel,
         );
 
-        $canonicalUrl = $request->url();
-        $imageUrl = $this->absolutePublicUrl((string) ($event->image_url ?? ''));
+        $shareOrigin = ShareOpenGraph::shareOrigin();
+        $canonicalUrl = rtrim($shareOrigin, '/').'/share/event/'.rawurlencode((string) $event->id);
+        $imageUrl = ShareOpenGraph::absoluteImageUrl((string) ($event->image_url ?? ''));
         $frontendBase = rtrim((string) config('app.frontend_url'), '/');
         $clientAppUrl = $frontendBase.'/challenges/'.rawurlencode((string) $event->id);
 
         return view('share.event', [
             'pageTitle' => "{$title} | Fitness 365 Pro Events",
+            'ogTitle' => "{$title} — Fitness 365 Pro",
+            'ogDescription' => $shareText,
+            'ogImageAlt' => "{$title} event cover",
             'eventTitle' => $title,
             'shareText' => $shareText,
             'location' => $location,
@@ -106,17 +111,4 @@ class EventShareWebController extends Controller
         return 'PHP '.number_format($fee, 0);
     }
 
-    private function absolutePublicUrl(string $url): string
-    {
-        $url = trim($url);
-        if ($url === '') {
-            return rtrim((string) config('app.url'), '/').'/logo.jpg';
-        }
-
-        if (str_starts_with($url, 'http://') || str_starts_with($url, 'https://')) {
-            return $url;
-        }
-
-        return rtrim((string) config('app.url'), '/').'/'.ltrim($url, '/');
-    }
 }

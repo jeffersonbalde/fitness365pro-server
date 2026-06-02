@@ -4,25 +4,15 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ $pageTitle }}</title>
-    <meta name="description" content="{{ $shareText }}">
+    <meta name="description" content="{{ $ogDescription }}">
 
-    <meta property="og:type" content="website">
-    <meta property="og:site_name" content="Fitness 365 Pro">
-    <meta property="og:title" content="{{ $eventTitle }} — Fitness 365 Pro">
-    <meta property="og:description" content="{{ $shareText }}">
-    <meta property="og:url" content="{{ $canonicalUrl }}">
-    @if($imageUrl)
-        <meta property="og:image" content="{{ $imageUrl }}">
-        <meta property="og:image:secure_url" content="{{ $imageUrl }}">
-        <meta property="og:image:alt" content="{{ $eventTitle }} event cover">
-    @endif
-
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="{{ $eventTitle }} — Fitness 365 Pro">
-    <meta name="twitter:description" content="{{ $shareText }}">
-    @if($imageUrl)
-        <meta name="twitter:image" content="{{ $imageUrl }}">
-    @endif
+    @include('share._og-meta', [
+        'ogTitle' => $ogTitle,
+        'ogDescription' => $ogDescription,
+        'canonicalUrl' => $canonicalUrl,
+        'imageUrl' => $imageUrl,
+        'ogImageAlt' => $ogImageAlt ?? $eventTitle,
+    ])
 
     <link rel="canonical" href="{{ $canonicalUrl }}">
     <style>

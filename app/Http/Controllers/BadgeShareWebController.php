@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Client;
+use App\Support\ShareOpenGraph;
 use App\Services\WorkoutStatsService;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -50,8 +51,12 @@ class BadgeShareWebController extends Controller
             $eventTitle,
         );
 
-        $canonicalUrl = $request->url();
-        $imageUrl = $this->absolutePublicUrl((string) ($payload['image_url'] ?? ''));
+        $shareOrigin = ShareOpenGraph::shareOrigin();
+        $canonicalUrl = rtrim($shareOrigin, '/').'/share/badge/'
+            .rawurlencode($clientId).'/'
+            .rawurlencode($eventId).'/'
+            .rawurlencode((string) ($payload['badge_key'] ?? $badgeKey));
+        $imageUrl = ShareOpenGraph::absoluteImageUrl((string) ($payload['image_url'] ?? ''));
         $frontendBase = rtrim((string) config('app.frontend_url'), '/');
         $clientAppUrl = sprintf(
             '%s/badge/%s/%s/%s',
@@ -74,17 +79,4 @@ class BadgeShareWebController extends Controller
         ]);
     }
 
-    private function absolutePublicUrl(string $url): string
-    {
-        $url = trim($url);
-        if ($url === '') {
-            return rtrim((string) config('app.url'), '/').'/logo.jpg';
-        }
-
-        if (str_starts_with($url, 'http://') || str_starts_with($url, 'https://')) {
-            return $url;
-        }
-
-        return rtrim((string) config('app.url'), '/').'/'.ltrim($url, '/');
-    }
 }

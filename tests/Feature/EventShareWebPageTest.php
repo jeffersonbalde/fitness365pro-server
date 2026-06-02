@@ -38,7 +38,8 @@ it('renders an open graph share page for active published events', function () {
         ->assertSee('og:title', false)
         ->assertSee('City Marathon 2026', false)
         ->assertSee('og:image', false)
-        ->assertSee('/storage/admin-events/marathon.jpg', false)
+        ->assertSee('admin-events/marathon.jpg', false)
+        ->assertSee('og:image:width', false)
         ->assertSee('Quezon Memorial Circle', false)
         ->assertSee('View event &amp; register', false);
 });
