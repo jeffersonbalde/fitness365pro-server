@@ -24,6 +24,7 @@ use App\Http\Controllers\Api\Admin\AdminEventParticipantsController;
 use App\Http\Controllers\Api\Admin\AdminModuleController;
 use App\Http\Controllers\Api\Admin\AdminMembersController;
 use App\Http\Controllers\Api\BadgeShareController;
+use App\Http\Controllers\Api\LeaderboardShareController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -55,6 +56,7 @@ Route::prefix('v1')->group(function () {
     Route::get('/profile/media/{path}', [ProfileController::class, 'media'])->where('path', '.*');
     Route::get('/public/badges/{clientId}/{eventId}/{badgeKey}', [BadgeShareController::class, 'show'])
         ->where('badgeKey', '.*');
+    Route::get('/public/leaderboard/{eventId}/{clientId}', [LeaderboardShareController::class, 'show']);
     Route::post('/paymaya/webhook', [MayaWebhookController::class, 'handle']);
 
     // Protected routes (require authentication)
