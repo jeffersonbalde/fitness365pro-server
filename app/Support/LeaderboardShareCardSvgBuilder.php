@@ -128,7 +128,12 @@ SVG;
             }
         }
 
-        return $this->toPngViaGd($payload);
+        $viaGd = $this->toPngViaGd($payload);
+        if ($viaGd !== null) {
+            return $viaGd;
+        }
+
+        return $this->toPngViaGdBitmap($payload);
     }
 
     /**
