@@ -73,21 +73,20 @@ final class ShareOpenGraph
     }
 
     /**
-     * Facebook crawlers need a direct HTTPS image URL (same as /share/event).
-     * Avoid og:image → card.png → 302 redirect, which breaks previews.
+     * Leaderboard brag posts use the generated rank card (card.png), not the plain event cover.
      *
      * @param  array<string, mixed>  $payload
      */
     public static function leaderboardOgImageUrl(array $payload): string
     {
-        $eventImage = self::absoluteImageUrl((string) ($payload['event_image_url'] ?? ''));
-        if ($eventImage !== self::defaultImageUrl()) {
-            return $eventImage;
-        }
-
         $card = (string) ($payload['share_card_url'] ?? '');
         if ($card !== '') {
             return $card;
+        }
+
+        $eventImage = self::absoluteImageUrl((string) ($payload['event_image_url'] ?? ''));
+        if ($eventImage !== self::defaultImageUrl()) {
+            return $eventImage;
         }
 
         return self::defaultImageUrl();

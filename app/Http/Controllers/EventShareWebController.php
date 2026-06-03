@@ -2,7 +2,9 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\RendersLeaderboardShareOgPage;
 use App\Models\AdminEvent;
+use App\Services\EventLeaderboardShareService;
 use App\Support\ShareOpenGraph;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -10,11 +12,40 @@ use Illuminate\View\View;
 
 class EventShareWebController extends Controller
 {
+    use RendersLeaderboardShareOgPage;
+
+    public function __construct(
+        private readonly EventLeaderboardShareService $leaderboardShare,
+    ) {}
+
     /**
      * Public share landing page with Open Graph meta tags for Facebook/social crawlers.
+     *
+     * ?standing={clientId} serves leaderboard rank-card OG on the /share/event/ path
+     * (Meta scrapes this reliably; /share/leaderboard/... alone often does not).
      */
     public function show(Request $request, string $eventId): View
     {
+        $standingId = trim((string) $request->query('standing', ''));
+        if ($standingId !== '') {
+            $shareOrigin = ShareOpenGraph::shareOrigin();
+            $query = ['standing' => $standingId];
+            $category = trim((string) $request->query('category', 'all'));
+            if ($category !== '' && $category !== 'all') {
+                $query['category'] = $category;
+            }
+            $canonicalUrl = rtrim($shareOrigin, '/').'/share/event/'
+                .rawurlencode($eventId).'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+
+            return $this->renderLeaderboardShareOgPage(
+                $request,
+                $this->leaderboardShare,
+                $eventId,
+                $standingId,
+                $canonicalUrl,
+            );
+        }
+
         $now = now('UTC');
 
         $event = AdminEvent::query()
@@ -110,5 +141,4 @@ class EventShareWebController extends Controller
 
         return 'PHP '.number_format($fee, 0);
     }
-
 }

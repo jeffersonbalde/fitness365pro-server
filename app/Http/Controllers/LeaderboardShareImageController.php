@@ -4,10 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Services\EventLeaderboardShareService;
 use App\Support\LeaderboardShareCardSvgBuilder;
-use App\Support\ShareOpenGraph;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
-use Illuminate\Support\Facades\Http;
 
 class LeaderboardShareImageController extends Controller
 {
@@ -27,12 +25,6 @@ class LeaderboardShareImageController extends Controller
 
         $png = $this->cardBuilder->toPng($payload);
         if ($png === null) {
-            // Serve image bytes inline — Facebook ignores 302 redirects on og:image.
-            $fallback = ShareOpenGraph::absoluteImageUrl((string) ($payload['event_image_url'] ?? ''));
-            if ($fallback !== ShareOpenGraph::defaultImageUrl()) {
-                return $this->proxyRasterImage($fallback);
-            }
-
             return response('', 404);
         }
 
@@ -61,27 +53,5 @@ class LeaderboardShareImageController extends Controller
             'Content-Type' => 'image/svg+xml',
             'Cache-Control' => 'public, max-age=86400',
         ]);
-    }
-
-    private function proxyRasterImage(string $url): Response
-    {
-        try {
-            $response = Http::timeout(12)->get($url);
-            if (! $response->successful()) {
-                return response('', 404);
-            }
-
-            $body = $response->body();
-            if ($body === '') {
-                return response('', 404);
-            }
-
-            return response($body, 200, [
-                'Content-Type' => ShareOpenGraph::imageMimeTypeForUrl($url),
-                'Cache-Control' => 'public, max-age=86400',
-            ]);
-        } catch (\Throwable) {
-            return response('', 404);
-        }
     }
 }

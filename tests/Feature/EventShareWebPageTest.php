@@ -2,8 +2,12 @@
 
 use App\Models\Admin;
 use App\Models\AdminEvent;
+use App\Models\Client;
+use App\Models\ClientAdminEventRegistration;
+use App\Models\ClientProfile;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class);
 
@@ -67,4 +71,54 @@ it('returns not found share page when event is not active', function () {
     $this->get("/share/event/{$event->id}")
         ->assertOk()
         ->assertSee('Event not found', false);
+});
+
+it('renders leaderboard rank-card open graph on event share url with standing query', function () {
+    if (! Schema::hasTable('client_admin_event_registrations')) {
+        $this->markTestSkipped('Registrations table not available.');
+    }
+
+    $admin = Admin::create([
+        'name' => 'Event LB Admin',
+        'email' => 'eventlb@example.com',
+        'password' => Hash::make('Password123!'),
+    ]);
+
+    $event = AdminEvent::create([
+        'admin_id' => $admin->id,
+        'title' => 'Independence Day Run',
+        'description' => 'Test',
+        'image_url' => '/storage/admin-events/run.jpg',
+        'location' => 'Metro Manila',
+        'category' => 'running',
+        'status' => 'published',
+        'fee_type' => 'free',
+        'fee' => 0,
+        'starts_at' => now()->subDay(),
+        'ends_at' => now()->addMonth(),
+    ]);
+
+    $client = Client::factory()->create();
+    ClientProfile::create([
+        'client_id' => $client->id,
+        'display_name' => 'Jefferson Balde',
+    ]);
+
+    ClientAdminEventRegistration::create([
+        'client_id' => $client->id,
+        'admin_event_id' => $event->id,
+        'registration_status' => 'confirmed',
+        'payment_status' => 'paid',
+        'progress_logged_km' => 0,
+        'progress_goal_km' => 12,
+        'progress_percent' => 0,
+    ]);
+
+    $this->get("/share/event/{$event->id}?standing={$client->id}")
+        ->assertOk()
+        ->assertSee('on Independence Day Run', false)
+        ->assertSee('#1 on Independence Day Run', false)
+        ->assertSee('Jefferson Balde', false)
+        ->assertSee('card.png', false)
+        ->assertSee('standing=', false);
 });

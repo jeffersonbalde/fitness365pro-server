@@ -62,7 +62,7 @@ it('renders an open graph share page for a confirmed leaderboard standing', func
         ->assertSee('Alex Runner', false)
         ->assertSee('Summer Run Challenge', false)
         ->assertSee('og:image', false)
-        ->assertDontSee('card.png', false)
+        ->assertSee('card.png', false)
         ->assertSee('View leaderboard', false);
 });
 
