@@ -24,9 +24,19 @@ class LeaderboardShareWebController extends Controller
         $frontendBase = rtrim((string) config('app.frontend_url'), '/');
 
         if ($payload === null) {
+            $shareOrigin = ShareOpenGraph::shareOrigin();
+            $canonicalUrl = rtrim($shareOrigin, '/').'/share/leaderboard/'
+                .rawurlencode($eventId).'/'
+                .rawurlencode($clientId);
+
             return view('share.leaderboard-not-found', [
                 'pageTitle' => 'Leaderboard standing not found — Fitness 365 Pro',
                 'frontendUrl' => $frontendBase,
+                'ogTitle' => 'Fitness 365 Pro Leaderboard',
+                'ogDescription' => 'View live event leaderboards and rankings on Fitness 365 Pro.',
+                'canonicalUrl' => $canonicalUrl,
+                'imageUrl' => ShareOpenGraph::defaultImageUrl(),
+                'ogImageType' => 'image/jpeg',
             ]);
         }
 

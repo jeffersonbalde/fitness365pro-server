@@ -90,5 +90,48 @@ it('returns not found when member is not on the leaderboard', function () {
 
     $this->get("/share/leaderboard/{$event->id}/{$client->id}")
         ->assertOk()
-        ->assertSee('Leaderboard standing not found', false);
+        ->assertSee('Leaderboard standing not found', false)
+        ->assertSee('og:image', false)
+        ->assertSee('Fitness 365 Pro Leaderboard', false);
+});
+
+it('renders open graph for a completed event standing', function () {
+    if (! Schema::hasTable('client_admin_event_registrations')) {
+        $this->markTestSkipped('Registrations table not available.');
+    }
+
+    $admin = Admin::create([
+        'name' => 'LB Admin 3',
+        'email' => 'lbshare3@example.com',
+        'password' => Hash::make('Password123!'),
+    ]);
+
+    $event = AdminEvent::create([
+        'admin_id' => $admin->id,
+        'title' => 'Finished Run',
+        'description' => 'Test',
+        'location' => 'Online',
+        'category' => 'running',
+        'status' => 'published',
+        'fee_type' => 'free',
+        'fee' => 0,
+        'starts_at' => now()->subMonths(2),
+        'ends_at' => now()->subDay(),
+    ]);
+
+    $client = Client::factory()->create();
+    ClientAdminEventRegistration::create([
+        'client_id' => $client->id,
+        'admin_event_id' => $event->id,
+        'registration_status' => 'confirmed',
+        'payment_status' => 'paid',
+        'progress_logged_km' => 5,
+        'progress_goal_km' => 10,
+        'progress_percent' => 50,
+    ]);
+
+    $this->get("/share/leaderboard/{$event->id}/{$client->id}")
+        ->assertOk()
+        ->assertSee('og:title', false)
+        ->assertSee('Finished Run', false);
 });

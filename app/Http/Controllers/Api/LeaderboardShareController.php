@@ -24,7 +24,7 @@ class LeaderboardShareController extends Controller
         if ($payload === null) {
             return response()->json([
                 'success' => false,
-                'message' => 'Leaderboard standing not found or event is not active.',
+                'message' => 'Leaderboard standing not found or the event is unavailable for sharing.',
             ], 404);
         }
 

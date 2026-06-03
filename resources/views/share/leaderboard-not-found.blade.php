@@ -5,6 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ $pageTitle }}</title>
     <meta name="robots" content="noindex">
+
+    @include('share._og-meta', [
+        'ogTitle' => $ogTitle ?? 'Fitness 365 Pro Leaderboard',
+        'ogDescription' => $ogDescription ?? 'View live event leaderboards on Fitness 365 Pro.',
+        'canonicalUrl' => $canonicalUrl ?? url()->current(),
+        'imageUrl' => $imageUrl ?? null,
+        'ogImageAlt' => 'Fitness 365 Pro',
+        'ogImageType' => $ogImageType ?? 'image/jpeg',
+    ])
 </head>
 <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center;">
     <div>

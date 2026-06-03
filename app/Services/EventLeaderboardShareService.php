@@ -28,7 +28,7 @@ class EventLeaderboardShareService
         $now = now('UTC');
         $event = AdminEvent::query()
             ->where('id', $eventId)
-            ->active($now)
+            ->publishedForRegistrants($now)
             ->first();
 
         if (! $event) {
