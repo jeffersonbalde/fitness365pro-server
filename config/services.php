@@ -61,6 +61,7 @@ return [
         'sandbox' => env('PAYMAYA_SANDBOX') !== null
             ? filter_var(env('PAYMAYA_SANDBOX'), FILTER_VALIDATE_BOOLEAN)
             : strtolower((string) env('PAYMAYA_ENVIRONMENT', 'sandbox')) !== 'production',
+        'webhook_secret' => env('PAYMAYA_WEBHOOK_SECRET', ''),
     ],
 
     'facebook' => [

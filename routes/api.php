@@ -16,6 +16,7 @@ use App\Http\Controllers\Api\EventGymSelectionController;
 use App\Http\Controllers\Api\EventRegistrationController;
 use App\Http\Controllers\Api\EventRunningSelectionController;
 use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\Api\MayaWebhookController;
 use App\Http\Controllers\Api\Admin\AdminCmsController;
 use App\Http\Controllers\Api\Admin\AdminDashboardController;
 use App\Http\Controllers\Api\Admin\AdminEventProgressController;
@@ -36,6 +37,9 @@ use Illuminate\Support\Facades\Route;
 |
 */
 
+// Legacy path used in Maya Business Manager (same as older projects): POST /api/webhooks/paymaya
+Route::post('/webhooks/paymaya', [MayaWebhookController::class, 'handle']);
+
 Route::prefix('v1')->group(function () {
     // Public authentication routes
     Route::post('/auth/register', [AuthController::class, 'register']);
@@ -51,6 +55,7 @@ Route::prefix('v1')->group(function () {
     Route::get('/profile/media/{path}', [ProfileController::class, 'media'])->where('path', '.*');
     Route::get('/public/badges/{clientId}/{eventId}/{badgeKey}', [BadgeShareController::class, 'show'])
         ->where('badgeKey', '.*');
+    Route::post('/paymaya/webhook', [MayaWebhookController::class, 'handle']);
 
     // Protected routes (require authentication)
     Route::middleware('auth:sanctum')->group(function () {
@@ -154,6 +159,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/cms/events/{id}/registration/confirm', [EventRegistrationController::class, 'confirm']);
         Route::post('/cms/events/{id}/registration/paymaya/checkout', [EventRegistrationController::class, 'paymayaCheckout']);
         Route::post('/cms/events/{id}/registration/paymaya/verify', [EventRegistrationController::class, 'paymayaVerify']);
+        Route::post('/cms/events/{id}/registration/paymaya/sync', [EventRegistrationController::class, 'paymayaSync']);
         Route::patch('/cms/events/{id}/registration/progress', [EventRegistrationController::class, 'logProgress']);
         Route::get('/cms/events/{id}/my-challenge-history', [EventRegistrationController::class, 'myChallengeHistory']);
         Route::post('/cms/events/{id}/register', [EventRegistrationController::class, 'register']);
@@ -196,6 +202,7 @@ Route::prefix('v1')->group(function () {
             Route::delete('/events/{id}', [AdminCmsController::class, 'deleteEvent']);
             Route::get('/events/{id}/registrations', [AdminEventParticipantsController::class, 'registrations']);
             Route::post('/events/{id}/registrations/manual', [AdminEventParticipantsController::class, 'manualRegister']);
+            Route::post('/events/{eventId}/registrations/{registrationId}/sync-payment', [AdminEventParticipantsController::class, 'syncPayment']);
 
             Route::get('/event-progress-submissions', [AdminEventProgressController::class, 'index']);
             Route::post('/event-progress-submissions/{id}/approve', [AdminEventProgressController::class, 'approve']);

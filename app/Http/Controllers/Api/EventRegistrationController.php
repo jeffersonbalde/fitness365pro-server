@@ -15,6 +15,7 @@ use App\Services\ChallengeEnrollmentProgressService;
 use App\Services\ClientNotificationService;
 use App\Services\EventEnrollmentProgressService;
 use App\Services\EventProgressSubmissionService;
+use App\Services\EventRegistrationPaymentService;
 use App\Support\ViewerChallengeProgressPresenter;
 use App\Support\WorkoutJsonPresenter;
 use App\Services\MayaCheckoutService;
@@ -28,7 +29,8 @@ use Illuminate\Support\Str;
 class EventRegistrationController extends Controller
 {
     public function __construct(
-        protected MayaCheckoutService $maya
+        protected MayaCheckoutService $maya,
+        protected EventRegistrationPaymentService $registrationPayments,
     ) {}
 
     private function frontendBaseUrl(): string
@@ -1263,7 +1265,7 @@ class EventRegistrationController extends Controller
     public function paymayaVerify(Request $request, string $id)
     {
         $validator = Validator::make($request->all(), [
-            'checkout_id' => 'required|string|max:80',
+            'checkout_id' => 'nullable|string|max:80',
         ]);
         if ($validator->fails()) {
             return response()->json(['success' => false, 'errors' => $validator->errors(), 'message' => 'Validation failed'], 422);
@@ -1277,8 +1279,6 @@ class EventRegistrationController extends Controller
             return response()->json(['success' => false, 'message' => 'Payment verification is unavailable.'], 503);
         }
 
-        $checkoutId = (string) $request->input('checkout_id');
-
         $now = now('UTC');
         $event = $this->findPublishedEvent($id, $now);
         if (! $event) {
@@ -1291,14 +1291,21 @@ class EventRegistrationController extends Controller
             ->where('admin_event_id', $event->id)
             ->first();
 
-        if (! $reg || trim((string) $reg->paymaya_checkout_id) !== $checkoutId) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Checkout does not match your registration.',
-            ], 422);
+        if (! $reg) {
+            return response()->json(['success' => false, 'message' => 'Registration not found.'], 404);
         }
 
-        if ($reg->registration_status === 'confirmed' && ($reg->payment_status === 'paid' || $reg->payment_status === 'free')) {
+        $checkoutId = trim((string) $request->input('checkout_id', ''));
+        if ($checkoutId === '') {
+            $checkoutId = trim((string) ($reg->paymaya_checkout_id ?? ''));
+        }
+
+        if ($checkoutId !== '' && trim((string) ($reg->paymaya_checkout_id ?? '')) === '') {
+            $reg->paymaya_checkout_id = $checkoutId;
+            $reg->save();
+        }
+
+        if ($reg->registration_status === 'confirmed' && in_array($reg->payment_status, ['paid', 'free'], true)) {
             return response()->json([
                 'success' => true,
                 'message' => 'Registration already confirmed.',
@@ -1312,49 +1319,87 @@ class EventRegistrationController extends Controller
             ]);
         }
 
-        $remote = $this->maya->retrieveCheckout($checkoutId);
-        if ($remote === null) {
-            return response()->json(['success' => false, 'message' => 'Unable to verify payment with Maya yet.'], 502);
-        }
+        $result = $this->registrationPayments->syncRegistrationPayment(
+            $event,
+            $reg->fresh() ?? $reg,
+            (string) $request->user()->id,
+        );
 
-        $statusRaw = '';
-        foreach (['paymentStatus', 'status', 'payment_status'] as $k) {
-            if (! empty($remote[$k]) && is_string($remote[$k])) {
-                $statusRaw = (string) $remote[$k];
-                break;
-            }
-        }
-
-        $reg->paymaya_payment_status_snapshot = Str::limit($statusRaw ?: 'UNKNOWN', 64, '');
-        $reg->save();
-
-        if (! MayaCheckoutService::checkoutIndicatesPaid($remote)) {
+        if (! $result['paid']) {
             return response()->json([
                 'success' => false,
-                'message' => 'Payment is not completed yet.',
+                'message' => $result['message'],
                 'data' => [
                     'paid' => false,
-                    'gateway_status' => $statusRaw,
+                    'gateway_status' => $result['gateway_status'],
                 ],
             ], 422);
         }
 
-        $reg->registration_status = 'confirmed';
-        $reg->payment_status = 'paid';
-        EventEnrollmentProgressService::syncRegistrationGoals($event, $reg, (string) $request->user()->id);
-        $reg->save();
-
         return response()->json([
             'success' => true,
-            'message' => 'Payment verified. You are registered for this event.',
+            'message' => $result['message'],
             'data' => [
                 'paid' => true,
+                'gateway_status' => $result['gateway_status'],
                 'participants_count' => ClientAdminEventRegistration::query()
                     ->where('admin_event_id', $event->id)
                     ->where('registration_status', 'confirmed')
                     ->count(),
             ],
         ]);
+    }
+
+    /**
+     * Poll Maya for payment status using stored checkout / reference numbers.
+     * Use when the user paid via QR and did not return through the success redirect.
+     */
+    public function paymayaSync(Request $request, string $id)
+    {
+        if (! Schema::hasTable('client_admin_event_registrations')) {
+            return response()->json(['success' => false, 'message' => 'Registration is not available.'], 503);
+        }
+
+        if (! $this->maya->configured()) {
+            return response()->json(['success' => false, 'message' => 'Payment verification is unavailable.'], 503);
+        }
+
+        $now = now('UTC');
+        $event = $this->findPublishedEvent($id, $now);
+        if (! $event) {
+            return response()->json(['success' => false, 'message' => 'Event not found.'], 404);
+        }
+
+        /** @var ClientAdminEventRegistration|null $reg */
+        $reg = ClientAdminEventRegistration::query()
+            ->where('client_id', $request->user()->id)
+            ->where('admin_event_id', $event->id)
+            ->first();
+
+        if (! $reg) {
+            return response()->json(['success' => false, 'message' => 'Registration not found.'], 404);
+        }
+
+        $result = $this->registrationPayments->syncRegistrationPayment(
+            $event,
+            $reg,
+            (string) $request->user()->id,
+        );
+
+        return response()->json([
+            'success' => $result['paid'],
+            'message' => $result['message'],
+            'data' => [
+                'paid' => $result['paid'],
+                'gateway_status' => $result['gateway_status'],
+                'registration_status' => $reg->fresh()?->registration_status,
+                'payment_status' => $reg->fresh()?->payment_status,
+                'participants_count' => ClientAdminEventRegistration::query()
+                    ->where('admin_event_id', $event->id)
+                    ->where('registration_status', 'confirmed')
+                    ->count(),
+            ],
+        ], $result['paid'] ? 200 : 422);
     }
 
     /**

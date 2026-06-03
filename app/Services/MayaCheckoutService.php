@@ -237,17 +237,83 @@ class MayaCheckoutService
     }
 
     /**
+     * Retrieve payment details using the merchant request reference number (RRN).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function retrievePaymentByRrn(string $requestReferenceNumber): ?array
+    {
+        $rrn = trim($requestReferenceNumber);
+        if ($rrn === '') {
+            return null;
+        }
+
+        if (str_starts_with($rrn, 'mock-') && $this->mocking()) {
+            return [
+                'requestReferenceNumber' => $rrn,
+                'paymentStatus' => 'PAYMENT_SUCCESS',
+                'status' => 'SUCCESS',
+                'isPaid' => true,
+            ];
+        }
+
+        $secretKey = trim((string) config('services.paymaya.secret_key'));
+        if ($secretKey === '') {
+            return null;
+        }
+
+        try {
+            $response = Http::timeout(40)
+                ->withBasicAuth($secretKey, '')
+                ->acceptJson()
+                ->get($this->baseUrl().'/payments/v1/payment-rrns/'.rawurlencode($rrn));
+        } catch (\Throwable $e) {
+            Log::error('PayMaya retrieve payment by RRN HTTP error', ['message' => $e->getMessage()]);
+
+            return null;
+        }
+
+        if (! $response->successful()) {
+            Log::warning('PayMaya retrieve payment by RRN failed', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+                'rrn' => $rrn,
+            ]);
+
+            return null;
+        }
+
+        return $response->json();
+    }
+
+    /**
      * Decide if Maya checkout indicates a successful settlement.
      */
     public static function checkoutIndicatesPaid(?array $payload): bool
     {
+        return self::payloadIndicatesPaid($payload);
+    }
+
+    /**
+     * Decide if a Maya checkout / payment payload indicates successful settlement.
+     */
+    public static function payloadIndicatesPaid(?array $payload): bool
+    {
         if ($payload === null) {
             return false;
         }
+
         $paymentStatus = $payload['paymentStatus'] ?? ($payload['status'] ?? '');
         $paymentStatus = is_string($paymentStatus) ? strtoupper(trim($paymentStatus)) : '';
 
-        $successTokens = ['PAYMENT_SUCCESS', 'PAYMENT_PAID', 'SUCCESS', 'PAID'];
+        $successTokens = [
+            'PAYMENT_SUCCESS',
+            'PAYMENT_PAID',
+            'SUCCESS',
+            'PAID',
+            'CAPTURED',
+            'AUTHORIZED',
+        ];
 
         foreach ($successTokens as $tok) {
             if ($tok === $paymentStatus) {
@@ -260,6 +326,14 @@ class MayaCheckoutService
         }
 
         /** @phpstan-ignore isset.offset */
-        return isset($payload['isPaid']) && filter_var($payload['isPaid'], FILTER_VALIDATE_BOOLEAN);
+        if (isset($payload['isPaid']) && filter_var($payload['isPaid'], FILTER_VALIDATE_BOOLEAN)) {
+            return true;
+        }
+
+        if (isset($payload['data']) && is_array($payload['data'])) {
+            return self::payloadIndicatesPaid($payload['data']);
+        }
+
+        return false;
     }
 }

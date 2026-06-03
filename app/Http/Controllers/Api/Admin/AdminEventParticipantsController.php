@@ -9,6 +9,7 @@ use App\Models\Client;
 use App\Models\ClientAdminEventRegistration;
 use App\Services\ClientNotificationService;
 use App\Services\EventEnrollmentProgressService;
+use App\Services\EventRegistrationPaymentService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
@@ -17,6 +18,10 @@ use Illuminate\Support\Facades\Validator;
 class AdminEventParticipantsController extends Controller
 {
     use LogsAdminActivity;
+
+    public function __construct(
+        private readonly EventRegistrationPaymentService $registrationPayments,
+    ) {}
 
     public function registrations(Request $request, string $id)
     {
@@ -188,6 +193,48 @@ class AdminEventParticipantsController extends Controller
                 'registration' => $this->serializeRegistration($reg),
             ],
         ], 201);
+    }
+
+    /**
+     * Reconcile a stuck Maya registration (pending_checkout) against the gateway.
+     */
+    public function syncPayment(Request $request, string $eventId, string $registrationId)
+    {
+        if (! Schema::hasTable('client_admin_event_registrations')) {
+            return response()->json(['success' => false, 'message' => 'Registrations not available.'], 503);
+        }
+
+        $event = AdminEvent::query()->find($eventId);
+        if (! $event) {
+            return response()->json(['success' => false, 'message' => 'Event not found.'], 404);
+        }
+
+        $reg = ClientAdminEventRegistration::query()
+            ->where('admin_event_id', $event->id)
+            ->where('id', $registrationId)
+            ->first();
+
+        if (! $reg) {
+            return response()->json(['success' => false, 'message' => 'Registration not found.'], 404);
+        }
+
+        $result = $this->registrationPayments->syncRegistrationPayment(
+            $event,
+            $reg,
+            (string) $reg->client_id,
+        );
+
+        $reg->refresh()->load(['client.profile', 'registeredByAdmin:id,name,email']);
+
+        return response()->json([
+            'success' => $result['paid'],
+            'message' => $result['message'],
+            'data' => [
+                'paid' => $result['paid'],
+                'gateway_status' => $result['gateway_status'],
+                'registration' => $this->serializeRegistration($reg),
+            ],
+        ], $result['paid'] ? 200 : 422);
     }
 
     protected function registrationWindowIsOpen(AdminEvent $event, Carbon $now): bool
