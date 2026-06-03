@@ -71,4 +71,37 @@ final class ShareOpenGraph
     {
         return trim((string) config('services.facebook.app_id', ''));
     }
+
+    /**
+     * Facebook crawlers need a direct HTTPS image URL (same as /share/event).
+     * Avoid og:image → card.png → 302 redirect, which breaks previews.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    public static function leaderboardOgImageUrl(array $payload): string
+    {
+        $eventImage = self::absoluteImageUrl((string) ($payload['event_image_url'] ?? ''));
+        if ($eventImage !== self::defaultImageUrl()) {
+            return $eventImage;
+        }
+
+        $card = (string) ($payload['share_card_url'] ?? '');
+        if ($card !== '') {
+            return $card;
+        }
+
+        return self::defaultImageUrl();
+    }
+
+    public static function imageMimeTypeForUrl(string $url): string
+    {
+        $path = strtolower((string) parse_url($url, PHP_URL_PATH));
+
+        return match (true) {
+            str_ends_with($path, '.png') => 'image/png',
+            str_ends_with($path, '.webp') => 'image/webp',
+            str_ends_with($path, '.gif') => 'image/gif',
+            default => 'image/jpeg',
+        };
+    }
 }

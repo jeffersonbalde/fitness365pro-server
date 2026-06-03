@@ -143,7 +143,7 @@ SVG;
         $fontBold = $this->resolveFontPath('bold');
         $fontReg = $this->resolveFontPath('regular');
         if ($fontBold === null) {
-            return null;
+            return $this->toPngViaGdBitmap($payload);
         }
 
         $img = imagecreatetruecolor(self::W, self::H);
@@ -194,6 +194,43 @@ SVG;
         if ($sub !== '') {
             imagettftext($img, 18, 0, 328, 450, $green, $fontReg ?? $fontBold, $sub);
         }
+
+        $this->compositeEventBannerGd($img, (string) ($payload['event_image_url'] ?? ''));
+
+        ob_start();
+        imagepng($img);
+        $binary = ob_get_clean();
+        imagedestroy($img);
+
+        return is_string($binary) && $binary !== '' ? $binary : null;
+    }
+
+    /**
+     * Servers without TTF fonts (typical on cloud) — still return a real PNG for crawlers.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function toPngViaGdBitmap(array $payload): ?string
+    {
+        $img = imagecreatetruecolor(self::W, self::H);
+        if ($img === false) {
+            return null;
+        }
+
+        $bg = imagecolorallocate($img, 15, 23, 42);
+        imagefill($img, 0, 0, $bg);
+        $white = imagecolorallocate($img, 248, 250, 252);
+        $muted = imagecolorallocate($img, 148, 163, 184);
+        $accent = imagecolorallocate($img, 249, 115, 22);
+
+        $rank = max(1, (int) ($payload['rank'] ?? 1));
+        $displayName = $this->truncate((string) ($payload['display_name'] ?? 'Athlete'), 28);
+        $eventTitle = $this->truncate((string) ($payload['event_title'] ?? 'Event'), 44);
+
+        imagestring($img, 5, 48, 200, "#{$rank} on Fitness 365 Pro", $accent);
+        imagestring($img, 4, 48, 240, $displayName, $white);
+        imagestring($img, 3, 48, 270, $eventTitle, $muted);
+        imagestring($img, 3, 48, 300, 'Leaderboard standing', $muted);
 
         $this->compositeEventBannerGd($img, (string) ($payload['event_image_url'] ?? ''));
 

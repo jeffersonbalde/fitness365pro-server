@@ -74,14 +74,8 @@ class LeaderboardShareWebController extends Controller
             .rawurlencode($eventId).'/'
             .rawurlencode($clientId).$categoryQuery;
 
-        $cardImageUrl = (string) ($payload['share_card_url'] ?? '');
-        $eventImageUrl = ShareOpenGraph::absoluteImageUrl((string) ($payload['event_image_url'] ?? ''));
-        $imageUrl = $cardImageUrl !== ''
-            ? $cardImageUrl
-            : ($eventImageUrl !== ShareOpenGraph::defaultImageUrl() ? $eventImageUrl : ShareOpenGraph::defaultImageUrl());
-        $ogImageType = str_ends_with(strtolower(parse_url($imageUrl, PHP_URL_PATH) ?: ''), '.png')
-            ? 'image/png'
-            : 'image/jpeg';
+        $imageUrl = ShareOpenGraph::leaderboardOgImageUrl($payload);
+        $ogImageType = ShareOpenGraph::imageMimeTypeForUrl($imageUrl);
 
         $clientAppUrl = $frontendBase.'/leaderboard/'
             .rawurlencode($eventId).'/'
