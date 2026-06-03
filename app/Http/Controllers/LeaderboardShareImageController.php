@@ -40,11 +40,7 @@ class LeaderboardShareImageController extends Controller
             return response('', 304)->header('ETag', $etag);
         }
 
-        return response($png, 200, [
-            'Content-Type' => 'image/png',
-            'Cache-Control' => 'public, max-age=86400',
-            'ETag' => $etag,
-        ]);
+        return response($png, 200, $this->imageHeaders('image/png', $etag));
     }
 
     public function showSvg(Request $request, string $eventId, string $clientId): Response
@@ -56,10 +52,25 @@ class LeaderboardShareImageController extends Controller
             return response('', 404);
         }
 
-        return response($this->cardBuilder->build($payload), 200, [
-            'Content-Type' => 'image/svg+xml',
+        return response($this->cardBuilder->build($payload), 200, $this->imageHeaders('image/svg+xml'));
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function imageHeaders(string $contentType, ?string $etag = null): array
+    {
+        $headers = [
+            'Content-Type' => $contentType,
             'Cache-Control' => 'public, max-age=86400',
-        ]);
+            'Access-Control-Allow-Origin' => '*',
+        ];
+
+        if ($etag !== null) {
+            $headers['ETag'] = $etag;
+        }
+
+        return $headers;
     }
 
     private function proxyRasterImage(string $url): Response
@@ -75,10 +86,7 @@ class LeaderboardShareImageController extends Controller
                 return response('', 404);
             }
 
-            return response($body, 200, [
-                'Content-Type' => ShareOpenGraph::imageMimeTypeForUrl($url),
-                'Cache-Control' => 'public, max-age=86400',
-            ]);
+            return response($body, 200, $this->imageHeaders(ShareOpenGraph::imageMimeTypeForUrl($url)));
         } catch (\Throwable) {
             return response('', 404);
         }
