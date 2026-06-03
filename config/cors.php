@@ -3,6 +3,8 @@
 $allowedOrigins = [
     'http://localhost:5173',
     'http://localhost:3000',
+    'https://fitness365pro.com',
+    'https://www.fitness365pro.com',
     'https://fitness365pro-wpwkq.ondigitalocean.app',
 ];
 
