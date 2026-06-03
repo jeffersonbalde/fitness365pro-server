@@ -114,11 +114,11 @@ it('renders leaderboard rank-card open graph on event share url with standing qu
         'progress_percent' => 0,
     ]);
 
-    $this->get("/share/event/{$event->id}?standing={$client->id}")
+    $this->get("/share/event/{$event->id}/standing/{$client->id}")
         ->assertOk()
         ->assertSee('on Independence Day Run', false)
         ->assertSee('#1 on Independence Day Run', false)
         ->assertSee('Jefferson Balde', false)
         ->assertSee('card.png', false)
-        ->assertSee('standing=', false);
+        ->assertSee('/standing/', false);
 });

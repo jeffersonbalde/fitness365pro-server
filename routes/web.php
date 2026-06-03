@@ -15,6 +15,9 @@ Route::get('/share/badge/{clientId}/{eventId}/{badgeKey}', [BadgeShareWebControl
     ->where('badgeKey', '.*')
     ->name('share.badge');
 
+Route::get('/share/event/{eventId}/standing/{clientId}', [EventShareWebController::class, 'showStanding'])
+    ->name('share.event.standing');
+
 Route::get('/share/event/{eventId}', [EventShareWebController::class, 'show'])
     ->name('share.event');
 

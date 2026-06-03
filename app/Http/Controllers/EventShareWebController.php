@@ -19,33 +19,33 @@ class EventShareWebController extends Controller
     ) {}
 
     /**
+     * Leaderboard brag card OG — path under /share/event/ so Meta scrapes it like event shares.
+     */
+    public function showStanding(Request $request, string $eventId, string $clientId): View
+    {
+        $shareOrigin = ShareOpenGraph::shareOrigin();
+        $category = trim((string) $request->query('category', 'all'));
+        $categoryQuery = $category !== '' && $category !== 'all'
+            ? '?category='.rawurlencode($category)
+            : '';
+        $canonicalUrl = rtrim($shareOrigin, '/').'/share/event/'
+            .rawurlencode($eventId).'/standing/'
+            .rawurlencode($clientId).$categoryQuery;
+
+        return $this->renderLeaderboardShareOgPage(
+            $request,
+            $this->leaderboardShare,
+            $eventId,
+            $clientId,
+            $canonicalUrl,
+        );
+    }
+
+    /**
      * Public share landing page with Open Graph meta tags for Facebook/social crawlers.
-     *
-     * ?standing={clientId} serves leaderboard rank-card OG on the /share/event/ path
-     * (Meta scrapes this reliably; /share/leaderboard/... alone often does not).
      */
     public function show(Request $request, string $eventId): View
     {
-        $standingId = trim((string) $request->query('standing', ''));
-        if ($standingId !== '') {
-            $shareOrigin = ShareOpenGraph::shareOrigin();
-            $query = ['standing' => $standingId];
-            $category = trim((string) $request->query('category', 'all'));
-            if ($category !== '' && $category !== 'all') {
-                $query['category'] = $category;
-            }
-            $canonicalUrl = rtrim($shareOrigin, '/').'/share/event/'
-                .rawurlencode($eventId).'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986);
-
-            return $this->renderLeaderboardShareOgPage(
-                $request,
-                $this->leaderboardShare,
-                $eventId,
-                $standingId,
-                $canonicalUrl,
-            );
-        }
-
         $now = now('UTC');
 
         $event = AdminEvent::query()
