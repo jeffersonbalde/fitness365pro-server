@@ -26,12 +26,13 @@ class LeaderboardShareImageController extends Controller
 
         $png = $this->cardBuilder->toPng($payload);
         if ($png === null) {
-            $svg = $this->cardBuilder->build($payload);
+            // Facebook/Open Graph require raster images (PNG/JPEG), not SVG.
+            $fallback = ShareOpenGraph::absoluteImageUrl((string) ($payload['event_image_url'] ?? ''));
+            if ($fallback !== ShareOpenGraph::defaultImageUrl()) {
+                return response('', 302)->header('Location', $fallback);
+            }
 
-            return response($svg, 200, [
-                'Content-Type' => 'image/svg+xml',
-                'Cache-Control' => 'public, max-age=86400',
-            ]);
+            return response('', 404);
         }
 
         $etag = '"'.sha1($png).'"';

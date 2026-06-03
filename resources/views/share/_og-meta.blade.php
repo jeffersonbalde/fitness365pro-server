@@ -16,7 +16,7 @@
     <meta property="og:image:alt" content="{{ $ogImageAlt ?? $ogTitle }}">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
-    <meta property="og:image:type" content="image/jpeg">
+    <meta property="og:image:type" content="{{ $ogImageType ?? 'image/jpeg' }}">
 @endif
 @if($fbAppId !== '')
     <meta property="fb:app_id" content="{{ $fbAppId }}">

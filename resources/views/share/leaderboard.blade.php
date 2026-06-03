@@ -12,6 +12,7 @@
         'canonicalUrl' => $canonicalUrl,
         'imageUrl' => $imageUrl,
         'ogImageAlt' => $ogImageAlt ?? $ogTitle,
+        'ogImageType' => $ogImageType ?? 'image/png',
     ])
 
     <link rel="canonical" href="{{ $canonicalUrl }}">
