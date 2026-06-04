@@ -92,6 +92,18 @@ final class ShareOpenGraph
         return self::defaultImageUrl();
     }
 
+    /**
+     * Fallback when dynamic card.png is unavailable (must still be a valid image URL for crawlers).
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    public static function leaderboardOgImageFallbackUrl(array $payload): string
+    {
+        $eventImage = self::absoluteImageUrl((string) ($payload['event_image_url'] ?? ''));
+
+        return $eventImage !== self::defaultImageUrl() ? $eventImage : self::defaultImageUrl();
+    }
+
     public static function imageMimeTypeForUrl(string $url): string
     {
         $path = strtolower((string) parse_url($url, PHP_URL_PATH));

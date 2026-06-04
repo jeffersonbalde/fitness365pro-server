@@ -268,12 +268,32 @@ SVG;
 
     private function encodePng($img): ?string
     {
-        ob_start();
-        imagepng($img);
-        $binary = ob_get_clean();
-        imagedestroy($img);
+        if (! function_exists('imagepng')) {
+            imagedestroy($img);
 
-        return is_string($binary) && $binary !== '' ? $binary : null;
+            return null;
+        }
+
+        $temp = fopen('php://temp', 'r+b');
+        if ($temp === false) {
+            imagedestroy($img);
+
+            return null;
+        }
+
+        try {
+            if (! @imagepng($img, $temp)) {
+                return null;
+            }
+
+            rewind($temp);
+            $binary = stream_get_contents($temp);
+
+            return is_string($binary) && $binary !== '' ? $binary : null;
+        } finally {
+            fclose($temp);
+            imagedestroy($img);
+        }
     }
 
     private function compositeEventBannerGd($img, string $url): void
@@ -288,14 +308,34 @@ SVG;
             if (! $response->successful()) {
                 return;
             }
-            $source = @imagecreatefromstring($response->body());
+            $body = $response->body();
+            if ($body === '' || strlen($body) > 4_000_000) {
+                return;
+            }
+
+            $source = @imagecreatefromstring($body);
             if ($source === false) {
                 return;
             }
+
+            $srcW = imagesx($source);
+            $srcH = imagesy($source);
+            if ($srcW < 1 || $srcH < 1) {
+                imagedestroy($source);
+
+                return;
+            }
+
             $boxW = self::W;
             $boxH = 248;
             $thumb = imagecreatetruecolor($boxW, $boxH);
-            imagecopyresampled($thumb, $source, 0, 0, 0, 0, $boxW, $boxH, imagesx($source), imagesy($source));
+            if ($thumb === false) {
+                imagedestroy($source);
+
+                return;
+            }
+
+            imagecopyresampled($thumb, $source, 0, 0, 0, 0, $boxW, $boxH, $srcW, $srcH);
             imagecopy($img, $thumb, 0, 0, 0, 0, $boxW, $boxH);
             imagedestroy($source);
             imagedestroy($thumb);
