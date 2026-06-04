@@ -316,7 +316,7 @@ class WorkoutStatsService
                 continue;
             }
 
-            $badge['base_image_url'] = (string) ($badge['image_url'] ?? '');
+            $badge['base_image_url'] = PublicUploadStorage::resolveForClient((string) ($badge['image_url'] ?? ''));
             $badge['image_url'] = sprintf(
                 '/share/reward/%s/%s/badge/%s.%s',
                 rawurlencode($clientId),
@@ -351,7 +351,7 @@ class WorkoutStatsService
                 continue;
             }
 
-            $trophy['base_image_url'] = (string) ($trophy['image_url'] ?? '');
+            $trophy['base_image_url'] = PublicUploadStorage::resolveForClient((string) ($trophy['image_url'] ?? ''));
             $trophy['image_url'] = sprintf(
                 '/share/reward/%s/%s/trophy/%s.%s',
                 rawurlencode($clientId),

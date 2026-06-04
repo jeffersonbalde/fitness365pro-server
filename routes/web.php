@@ -6,6 +6,7 @@ use App\Http\Controllers\LeaderboardShareImageController;
 use App\Http\Controllers\LeaderboardShareWebController;
 use App\Http\Controllers\PersonalizedRewardImageController;
 use App\Http\Controllers\ShareMediaProxyController;
+use App\Http\Controllers\TrophyShareWebController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -15,6 +16,10 @@ Route::get('/', function () {
 Route::get('/share/badge/{clientId}/{eventId}/{badgeKey}', [BadgeShareWebController::class, 'show'])
     ->where('badgeKey', '.*')
     ->name('share.badge');
+
+Route::get('/share/trophy/{clientId}/{eventId}/{trophyKey}', [TrophyShareWebController::class, 'show'])
+    ->where('trophyKey', '.*')
+    ->name('share.trophy');
 
 Route::get('/share/event/{eventId}/standing/{clientId}', [EventShareWebController::class, 'showStanding'])
     ->name('share.event.standing');

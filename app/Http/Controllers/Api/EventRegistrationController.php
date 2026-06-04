@@ -16,6 +16,7 @@ use App\Services\ClientNotificationService;
 use App\Services\EventEnrollmentProgressService;
 use App\Services\EventProgressSubmissionService;
 use App\Services\EventRegistrationPaymentService;
+use App\Support\PublicUploadStorage;
 use App\Support\ViewerChallengeProgressPresenter;
 use App\Support\WorkoutJsonPresenter;
 use App\Services\MayaCheckoutService;
@@ -1592,30 +1593,23 @@ class EventRegistrationController extends Controller
             ], $forMemberProfile ? 404 : 403);
         }
 
-        $challengeProgress = ViewerChallengeProgressPresenter::slice($event, $reg, $subjectClientId);
+        $challengeProgress = ViewerChallengeProgressPresenter::sliceReadOnly($event, $reg, $subjectClientId);
 
-        $submissions = [];
+        $submissionModels = collect();
         if (EventProgressSubmissionService::tableReady()) {
-            $submissions = EventProgressSubmission::query()
+            $submissionModels = EventProgressSubmission::query()
                 ->where('client_id', $subjectClientId)
                 ->where('admin_event_id', $event->id)
                 ->with(['workoutLog' => fn ($q) => $q->withCount(['likes', 'comments'])])
                 ->orderByDesc('created_at')
                 ->limit(100)
-                ->get()
-                ->map(fn (EventProgressSubmission $s) => $this->serializeSubmissionHistoryRow(
-                    $s,
-                    $viewerClientId,
-                    $forMemberProfile,
-                ))
-                ->values()
-                ->all();
+                ->get();
         }
 
-        $linkedWorkouts = [];
+        $linkedWorkoutModels = collect();
         $workoutsTable = (new WorkoutLog())->getTable();
         if (Schema::hasColumn($workoutsTable, 'admin_event_id')) {
-            $linkedWorkouts = WorkoutLog::query()
+            $linkedWorkoutModels = WorkoutLog::query()
                 ->where('client_id', $subjectClientId)
                 ->where('admin_event_id', $event->id)
                 ->with(['linkedAdminEvent' => fn ($q) => $q->select('id', 'title')])
@@ -1623,11 +1617,33 @@ class EventRegistrationController extends Controller
                 ->orderByDesc('workout_date')
                 ->orderByDesc('created_at')
                 ->limit(80)
-                ->get()
-                ->map(fn (WorkoutLog $w) => WorkoutJsonPresenter::serializeForClientViewer($w, $viewerClientId))
-                ->values()
-                ->all();
+                ->get();
         }
+
+        $allWorkouts = $linkedWorkoutModels
+            ->concat($submissionModels->map(fn (EventProgressSubmission $s) => $s->workoutLog)->filter())
+            ->unique('id')
+            ->values();
+
+        $workoutPayloadById = collect(
+            WorkoutJsonPresenter::serializeManyForClientViewer($allWorkouts, $viewerClientId)
+        )->keyBy('id');
+
+        $submissions = $submissionModels
+            ->map(fn (EventProgressSubmission $s) => $this->serializeSubmissionHistoryRow(
+                $s,
+                $viewerClientId,
+                $forMemberProfile,
+                $workoutPayloadById,
+            ))
+            ->values()
+            ->all();
+
+        $linkedWorkouts = $linkedWorkoutModels
+            ->map(fn (WorkoutLog $w) => $workoutPayloadById->get((string) $w->id))
+            ->filter()
+            ->values()
+            ->all();
 
         $member = null;
         if ($forMemberProfile) {
@@ -1653,7 +1669,8 @@ class EventRegistrationController extends Controller
                         && $event->mileage_challenge_km !== null
                         ? round((float) $event->mileage_challenge_km, 4)
                         : null,
-                    'badges' => is_array($event->badges) ? $event->badges : [],
+                    'badges' => $this->hydrateEventRewardMediaRows(is_array($event->badges) ? $event->badges : []),
+                    'trophies' => $this->hydrateEventRewardMediaRows(is_array($event->trophies) ? $event->trophies : []),
                 ],
                 'member' => $member,
                 'is_member_view' => $forMemberProfile,
@@ -1672,6 +1689,7 @@ class EventRegistrationController extends Controller
         EventProgressSubmission $submission,
         string $viewerId,
         bool $forMemberProfile = false,
+        ?\Illuminate\Support\Collection $workoutPayloadById = null,
     ): array {
         $row = [
             'id' => (string) $submission->id,
@@ -1691,13 +1709,31 @@ class EventRegistrationController extends Controller
         $wl = $submission->workoutLog;
         $row['workout'] = null;
         if ($wl instanceof WorkoutLog) {
-            if (! isset($wl->likes_count)) {
-                $wl->loadCount(['likes', 'comments']);
-            }
-            $row['workout'] = WorkoutJsonPresenter::serializeForClientViewer($wl, $viewerId);
+            $cached = $workoutPayloadById?->get((string) $wl->id);
+            $row['workout'] = $cached ?? WorkoutJsonPresenter::serializeForClientViewer($wl, $viewerId);
         }
 
         return $row;
+    }
+
+    /**
+     * @param  mixed  $rows
+     * @return list<array<string, mixed>>
+     */
+    private function hydrateEventRewardMediaRows(mixed $rows): array
+    {
+        if (! is_array($rows)) {
+            return [];
+        }
+
+        return array_values(array_map(function ($row) {
+            if (! is_array($row)) {
+                return $row;
+            }
+            $row['image_url'] = PublicUploadStorage::resolveForClient($row['image_url'] ?? '');
+
+            return $row;
+        }, $rows));
     }
 
     /** @deprecated Use POST registration/confirm or the registration wizard. */
