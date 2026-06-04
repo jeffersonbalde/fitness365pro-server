@@ -7,6 +7,7 @@ use App\Models\ClientAdminEventRegistration;
 use App\Models\ClientAdminEventRunningSelection;
 use App\Models\CommunityMember;
 use App\Models\WorkoutLog;
+use App\Support\PublicUploadStorage;
 use Illuminate\Support\Facades\Schema;
 
 class WorkoutStatsService
@@ -156,8 +157,8 @@ class WorkoutStatsService
                 continue;
             }
 
-            // Keep the original artwork URL for the renderer.
-            $row['base_image_url'] = (string) ($row['image_url'] ?? '');
+            // Keep the original artwork URL for the renderer (normalized for client media proxy).
+            $row['base_image_url'] = PublicUploadStorage::resolveForClient((string) ($row['image_url'] ?? ''));
 
             // Public, no-auth endpoint. Starts with "/" so client resolveMediaUrl prefixes API origin.
             $row['image_url'] = sprintf(

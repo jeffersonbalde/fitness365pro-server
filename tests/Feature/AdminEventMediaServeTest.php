@@ -21,6 +21,15 @@ it('serves admin event badge images through the public media route', function ()
         ->assertOk();
 });
 
+it('serves admin event trophy images through the public media route', function () {
+    Storage::fake('public');
+    Config::set('filesystems.upload_disk', 'public');
+    Storage::disk('public')->put('admin-event-trophies/gold.png', 'fake-trophy-bytes');
+
+    $this->get('/api/v1/profile/media/admin-event-trophies/gold.png')
+        ->assertOk();
+});
+
 it('rejects unknown directories on the public media route', function () {
     $this->getJson('/api/v1/profile/media/private/secret.jpg')
         ->assertForbidden()

@@ -21,6 +21,7 @@ final class PublicUploadStorage
         'profile-badges',
         'admin-events',
         'admin-event-badges',
+        'admin-event-trophies',
     ];
 
     public static function diskName(): string

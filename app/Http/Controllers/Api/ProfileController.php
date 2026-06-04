@@ -121,7 +121,8 @@ class ProfileController extends Controller
             || str_starts_with($normalizedPath, 'workout-photos/')
             || str_starts_with($normalizedPath, 'profile-badges/')
             || str_starts_with($normalizedPath, 'admin-events/')
-            || str_starts_with($normalizedPath, 'admin-event-badges/');
+            || str_starts_with($normalizedPath, 'admin-event-badges/')
+            || str_starts_with($normalizedPath, 'admin-event-trophies/');
         if (!$allowed) {
             return response()->json([
                 'success' => false,
