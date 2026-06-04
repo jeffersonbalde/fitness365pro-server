@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Client;
+use App\Support\PublicUploadStorage;
 use App\Support\ShareOpenGraph;
 use App\Services\WorkoutStatsService;
 use Illuminate\Http\Request;
@@ -135,12 +136,20 @@ class PersonalizedRewardImageController extends Controller
 
     private function fetchImageBytes(string $url): ?string
     {
+        $relative = PublicUploadStorage::extractRelativePath($url);
+        if ($relative !== null && PublicUploadStorage::disk()->exists($relative)) {
+            $bytes = PublicUploadStorage::disk()->get($relative);
+
+            return is_string($bytes) && $bytes !== '' ? $bytes : null;
+        }
+
         try {
             $res = Http::timeout(8)->retry(1, 150)->get($url);
             if (! $res->ok()) {
                 return null;
             }
             $body = $res->body();
+
             return is_string($body) && $body !== '' ? $body : null;
         } catch (\Throwable) {
             return null;
