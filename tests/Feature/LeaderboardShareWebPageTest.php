@@ -113,6 +113,12 @@ it('returns a png rank card image for a confirmed standing', function () {
     $this->get("/share/leaderboard/{$event->id}/{$client->id}/card.png")
         ->assertOk()
         ->assertHeader('Content-Type', 'image/png');
+
+    $pngBytes = $this->get("/share/leaderboard/{$event->id}/{$client->id}/card.png")->getContent();
+    $info = getimagesizefromstring($pngBytes);
+    expect($info)->not->toBeFalse();
+    expect($info[0])->toBe(1200);
+    expect($info[1])->toBe(630);
 });
 
 it('returns not found when member is not on the leaderboard', function () {

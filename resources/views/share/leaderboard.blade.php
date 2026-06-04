@@ -88,5 +88,16 @@
         <p>{{ $shareText }}</p>
         <a class="btn" href="{{ $clientAppUrl }}">View leaderboard</a>
     </main>
+    <script>
+        (function () {
+            var ua = navigator.userAgent || '';
+            if (/facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|Slackbot|Discordbot/i.test(ua)) {
+                return;
+            }
+            setTimeout(function () {
+                window.location.replace(@json($clientAppUrl));
+            }, 400);
+        })();
+    </script>
 </body>
 </html>

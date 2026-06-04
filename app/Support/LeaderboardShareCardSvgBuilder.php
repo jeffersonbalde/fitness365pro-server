@@ -113,15 +113,14 @@ SVG;
     public function toPng(array $payload): ?string
     {
         try {
-            // Skip Imagick — cloud hosts often block external SVG/image policies (HTTP 500).
-            $viaGd = $this->toPngViaGd($payload);
-            if ($viaGd !== null) {
-                return $viaGd;
+            $bitmap = $this->toPngViaGdBitmap($payload);
+            if ($bitmap !== null) {
+                return $bitmap;
             }
 
-            return $this->toPngViaGdBitmap($payload);
+            return $this->toPngViaGd($payload);
         } catch (\Throwable) {
-            return null;
+            return $this->toPngViaGdBitmap($payload);
         }
     }
 
@@ -148,14 +147,8 @@ SVG;
         imagealphablending($img, true);
         imagesavealpha($img, true);
 
-        for ($y = 0; $y < self::H; $y++) {
-            $ratio = $y / max(1, self::H - 1);
-            $r = (int) (11 + (15 - 11) * $ratio);
-            $g = (int) (18 + (23 - 18) * $ratio);
-            $b = (int) (32 + (42 - 32) * $ratio);
-            $c = imagecolorallocate($img, $r, $g, $b);
-            imageline($img, 0, $y, self::W, $y, $c);
-        }
+        $this->paintCardBackground($img);
+        $this->compositeEventBannerGd($img, (string) ($payload['event_image_url'] ?? ''));
 
         $white = imagecolorallocate($img, 248, 250, 252);
         $muted = imagecolorallocate($img, 148, 163, 184);
@@ -189,14 +182,7 @@ SVG;
             imagettftext($img, 18, 0, 328, 450, $green, $fontReg ?? $fontBold, $sub);
         }
 
-        $this->compositeEventBannerGd($img, (string) ($payload['event_image_url'] ?? ''));
-
-        ob_start();
-        imagepng($img);
-        $binary = ob_get_clean();
-        imagedestroy($img);
-
-        return is_string($binary) && $binary !== '' ? $binary : null;
+        return $this->encodePng($img);
     }
 
     /**
@@ -206,28 +192,82 @@ SVG;
      */
     private function toPngViaGdBitmap(array $payload): ?string
     {
+        if (! function_exists('imagecreatetruecolor')) {
+            return null;
+        }
+
         $img = imagecreatetruecolor(self::W, self::H);
         if ($img === false) {
             return null;
         }
 
-        $bg = imagecolorallocate($img, 15, 23, 42);
-        imagefill($img, 0, 0, $bg);
+        $this->paintCardBackground($img);
+        $this->compositeEventBannerGd($img, (string) ($payload['event_image_url'] ?? ''));
+
         $white = imagecolorallocate($img, 248, 250, 252);
         $muted = imagecolorallocate($img, 148, 163, 184);
         $accent = imagecolorallocate($img, 249, 115, 22);
+        $green = imagecolorallocate($img, 134, 239, 172);
+        $panel = imagecolorallocate($img, 30, 41, 59);
 
         $rank = max(1, (int) ($payload['rank'] ?? 1));
         $displayName = $this->truncate((string) ($payload['display_name'] ?? 'Athlete'), 28);
         $eventTitle = $this->truncate((string) ($payload['event_title'] ?? 'Event'), 44);
+        $categoryLabel = (string) ($payload['category_label'] ?? '');
+        $progress = is_array($payload['progress'] ?? null) ? $payload['progress'] : [];
+        $logged = (float) ($progress['logged_distance_km'] ?? 0);
+        $goalCompleted = (bool) ($progress['goal_completed'] ?? false);
+        $percent = $progress['progress_percent'] ?? null;
 
-        imagestring($img, 5, 48, 200, "#{$rank} on Fitness 365 Pro", $accent);
-        imagestring($img, 4, 48, 240, $displayName, $white);
-        imagestring($img, 3, 48, 270, $eventTitle, $muted);
-        imagestring($img, 3, 48, 300, 'Leaderboard standing', $muted);
+        $rankLabel = match ($rank) {
+            1 => '1st Place',
+            2 => '2nd Place',
+            3 => '3rd Place',
+            default => "#{$rank} Place",
+        };
 
-        $this->compositeEventBannerGd($img, (string) ($payload['event_image_url'] ?? ''));
+        imagefilledrectangle($img, 56, 268, 280, 312, $panel);
+        imagestring($img, 5, 72, 278, $rankLabel, $accent);
+        imagestring($img, 4, 72, 332, 'FITNESS 365 PRO - LEADERBOARD', $muted);
+        imagestring($img, 5, 72, 368, $displayName, $white);
+        imagestring($img, 4, 72, 402, $eventTitle, $muted);
 
+        $statsPrimary = number_format($logged, 1).' km logged';
+        imagefilledrectangle($img, 72, 430, 300, 482, $panel);
+        imagestring($img, 4, 92, 452, $statsPrimary, $white);
+
+        $statsSecondary = $goalCompleted
+            ? 'Goal completed'
+            : ($percent !== null ? number_format((float) $percent, 1).'% of goal' : '');
+        if ($statsSecondary !== '') {
+            imagefilledrectangle($img, 316, 430, 520, 482, $panel);
+            imagestring($img, 3, 336, 452, $statsSecondary, $green);
+        }
+
+        if ($categoryLabel !== '' && $categoryLabel !== 'General') {
+            imagefilledrectangle($img, 536, 430, 720, 482, $panel);
+            imagestring($img, 3, 556, 452, $this->truncate($categoryLabel, 18), $muted);
+        }
+
+        imagestring($img, 3, 72, 560, 'fitness365pro.com', $muted);
+
+        return $this->encodePng($img);
+    }
+
+    private function paintCardBackground($img): void
+    {
+        for ($y = 248; $y < self::H; $y++) {
+            $ratio = ($y - 248) / max(1, self::H - 248 - 1);
+            $r = (int) (11 + (15 - 11) * $ratio);
+            $g = (int) (18 + (23 - 18) * $ratio);
+            $b = (int) (32 + (42 - 32) * $ratio);
+            $c = imagecolorallocate($img, $r, $g, $b);
+            imageline($img, 0, $y, self::W, $y, $c);
+        }
+    }
+
+    private function encodePng($img): ?string
+    {
         ob_start();
         imagepng($img);
         $binary = ob_get_clean();
