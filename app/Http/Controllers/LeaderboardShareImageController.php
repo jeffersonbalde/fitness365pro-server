@@ -28,11 +28,6 @@ class LeaderboardShareImageController extends Controller
 
             $png = $this->cardBuilder->toPng($payload);
             if ($png === null || $png === '') {
-                $fallbackUrl = ShareOpenGraph::leaderboardOgImageFallbackUrl($payload);
-                if ($fallbackUrl !== ShareOpenGraph::defaultImageUrl()) {
-                    return $this->proxyRasterImage($fallbackUrl);
-                }
-
                 return response('', 404);
             }
 

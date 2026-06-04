@@ -73,35 +73,24 @@ final class ShareOpenGraph
     }
 
     /**
-     * Leaderboard brag posts use the generated rank card (card.png), not the plain event cover.
+     * Facebook scrapes direct CDN images reliably (same as event shares).
+     * Rank card PNG is used in-page; card URL remains for Feed Dialog picture=.
      *
      * @param  array<string, mixed>  $payload
      */
     public static function leaderboardOgImageUrl(array $payload): string
     {
-        $card = (string) ($payload['share_card_url'] ?? '');
-        if ($card !== '') {
-            return $card;
-        }
-
         $eventImage = self::absoluteImageUrl((string) ($payload['event_image_url'] ?? ''));
         if ($eventImage !== self::defaultImageUrl()) {
             return $eventImage;
         }
 
+        $card = (string) ($payload['share_card_url'] ?? '');
+        if ($card !== '') {
+            return $card;
+        }
+
         return self::defaultImageUrl();
-    }
-
-    /**
-     * Fallback when dynamic card.png is unavailable (must still be a valid image URL for crawlers).
-     *
-     * @param  array<string, mixed>  $payload
-     */
-    public static function leaderboardOgImageFallbackUrl(array $payload): string
-    {
-        $eventImage = self::absoluteImageUrl((string) ($payload['event_image_url'] ?? ''));
-
-        return $eventImage !== self::defaultImageUrl() ? $eventImage : self::defaultImageUrl();
     }
 
     public static function imageMimeTypeForUrl(string $url): string
