@@ -157,11 +157,10 @@ class WorkoutStatsService
                 continue;
             }
 
-            // Keep the original artwork URL for the renderer (normalized for client media proxy).
-            $row['base_image_url'] = PublicUploadStorage::resolveForClient((string) ($row['image_url'] ?? ''));
-
-            // Public, no-auth endpoint. Starts with "/" so client resolveMediaUrl prefixes API origin.
-            $row['image_url'] = sprintf(
+            // Base artwork for in-app tiles/modals (media proxy). Personalized URL is separate for share/download.
+            $base = PublicUploadStorage::resolveForClient((string) ($row['image_url'] ?? ''));
+            $row['base_image_url'] = $base;
+            $row['personalized_image_url'] = sprintf(
                 '/share/reward/%s/%s/%s/%s.%s',
                 rawurlencode($clientId),
                 rawurlencode($eventId),
@@ -169,6 +168,7 @@ class WorkoutStatsService
                 rawurlencode($key),
                 $ext,
             );
+            $row['image_url'] = $base;
 
             $out[] = $row;
         }
