@@ -5,6 +5,7 @@ use App\Http\Controllers\EventShareWebController;
 use App\Http\Controllers\LeaderboardShareImageController;
 use App\Http\Controllers\LeaderboardShareWebController;
 use App\Http\Controllers\PersonalizedRewardImageController;
+use App\Http\Controllers\ShareMediaProxyController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -29,6 +30,9 @@ Route::get('/share/leaderboard/{eventId}/{clientId}/card.png', [LeaderboardShare
 
 Route::get('/share/leaderboard/{eventId}/{clientId}/card.svg', [LeaderboardShareImageController::class, 'showSvg'])
     ->name('share.leaderboard.card.svg');
+
+Route::get('/share/media-proxy', [ShareMediaProxyController::class, 'show'])
+    ->name('share.media-proxy');
 
 Route::get('/share/reward/{clientId}/{eventId}/{kind}/{rewardKey}.png', [PersonalizedRewardImageController::class, 'show'])
     ->where('rewardKey', '.*')

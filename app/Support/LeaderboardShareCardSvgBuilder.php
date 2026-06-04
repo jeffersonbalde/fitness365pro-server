@@ -112,28 +112,17 @@ SVG;
      */
     public function toPng(array $payload): ?string
     {
-        $svg = $this->build($payload);
-
-        if (class_exists(\Imagick::class)) {
-            try {
-                $im = new \Imagick;
-                $im->setBackgroundColor(new \ImagickPixel('transparent'));
-                $im->readImageBlob($svg);
-                $im->setImageFormat('png');
-                $im->resizeImage(self::W, self::H, \Imagick::FILTER_LANCZOS, 1);
-
-                return $im->getImageBlob() ?: null;
-            } catch (\Throwable) {
-                // fall through to GD
+        try {
+            // Skip Imagick — cloud hosts often block external SVG/image policies (HTTP 500).
+            $viaGd = $this->toPngViaGd($payload);
+            if ($viaGd !== null) {
+                return $viaGd;
             }
-        }
 
-        $viaGd = $this->toPngViaGd($payload);
-        if ($viaGd !== null) {
-            return $viaGd;
+            return $this->toPngViaGdBitmap($payload);
+        } catch (\Throwable) {
+            return null;
         }
-
-        return $this->toPngViaGdBitmap($payload);
     }
 
     /**

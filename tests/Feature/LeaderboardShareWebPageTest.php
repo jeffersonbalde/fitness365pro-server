@@ -66,6 +66,55 @@ it('renders an open graph share page for a confirmed leaderboard standing', func
         ->assertSee('View leaderboard', false);
 });
 
+it('returns a png rank card image for a confirmed standing', function () {
+    if (! Schema::hasTable('client_admin_event_registrations')) {
+        $this->markTestSkipped('Registrations table not available.');
+    }
+
+    if (! function_exists('imagecreatetruecolor')) {
+        $this->markTestSkipped('GD extension not available.');
+    }
+
+    $admin = Admin::create([
+        'name' => 'LB Card Admin',
+        'email' => 'lbcard@example.com',
+        'password' => Hash::make('Password123!'),
+    ]);
+
+    $event = AdminEvent::create([
+        'admin_id' => $admin->id,
+        'title' => 'Card Test Run',
+        'description' => 'Test',
+        'location' => 'Online',
+        'category' => 'running',
+        'status' => 'published',
+        'fee_type' => 'free',
+        'fee' => 0,
+        'starts_at' => now()->subDay(),
+        'ends_at' => now()->addMonth(),
+    ]);
+
+    $client = Client::factory()->create();
+    ClientProfile::create([
+        'client_id' => $client->id,
+        'display_name' => 'Card Tester',
+    ]);
+
+    ClientAdminEventRegistration::create([
+        'client_id' => $client->id,
+        'admin_event_id' => $event->id,
+        'registration_status' => 'confirmed',
+        'payment_status' => 'paid',
+        'progress_logged_km' => 3,
+        'progress_goal_km' => 10,
+        'progress_percent' => 30,
+    ]);
+
+    $this->get("/share/leaderboard/{$event->id}/{$client->id}/card.png")
+        ->assertOk()
+        ->assertHeader('Content-Type', 'image/png');
+});
+
 it('returns not found when member is not on the leaderboard', function () {
     $admin = Admin::create([
         'name' => 'LB Admin 2',

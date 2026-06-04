@@ -18,29 +18,35 @@ class LeaderboardShareImageController extends Controller
 
     public function show(Request $request, string $eventId, string $clientId): Response
     {
-        $category = trim((string) $request->query('category', 'all'));
-        $payload = $this->leaderboardShare->resolvePublicStanding($eventId, $clientId, $category);
+        try {
+            $category = trim((string) $request->query('category', 'all'));
+            $payload = $this->leaderboardShare->resolvePublicStanding($eventId, $clientId, $category);
 
-        if ($payload === null) {
-            return response('', 404);
-        }
-
-        $png = $this->cardBuilder->toPng($payload);
-        if ($png === null) {
-            $fallback = ShareOpenGraph::absoluteImageUrl((string) ($payload['event_image_url'] ?? ''));
-            if ($fallback !== ShareOpenGraph::defaultImageUrl()) {
-                return $this->proxyRasterImage($fallback);
+            if ($payload === null) {
+                return response('', 404);
             }
 
-            return response('', 404);
-        }
+            $png = $this->cardBuilder->toPng($payload);
+            if ($png === null || $png === '') {
+                $fallback = ShareOpenGraph::absoluteImageUrl((string) ($payload['event_image_url'] ?? ''));
+                if ($fallback !== ShareOpenGraph::defaultImageUrl()) {
+                    return $this->proxyRasterImage($fallback);
+                }
 
-        $etag = '"'.sha1($png).'"';
-        if ($request->headers->get('If-None-Match') === $etag) {
-            return response('', 304)->header('ETag', $etag);
-        }
+                return response('', 404);
+            }
 
-        return response($png, 200, $this->imageHeaders('image/png', $etag));
+            $etag = '"'.sha1($png).'"';
+            if ($request->headers->get('If-None-Match') === $etag) {
+                return response('', 304)->header('ETag', $etag);
+            }
+
+            return response($png, 200, $this->imageHeaders('image/png', $etag));
+        } catch (\Throwable $e) {
+            report($e);
+
+            return response('', 500);
+        }
     }
 
     public function showSvg(Request $request, string $eventId, string $clientId): Response
