@@ -113,6 +113,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/social/leaderboard', [SocialController::class, 'leaderboard']);
         Route::get('/social/suggested-buddies', [SocialController::class, 'suggestedBuddies']);
         Route::get('/social/profile/{clientId}', [SocialController::class, 'userProfile']);
+        Route::get('/social/profile/{clientId}/workout-stats', [SocialController::class, 'userWorkoutStats']);
         Route::get('/social/profile/{clientId}/followers', [SocialController::class, 'userFollowers']);
         Route::get('/social/profile/{clientId}/following', [SocialController::class, 'userFollowing']);
         Route::get('/social/profile/{clientId}/events/{eventId}/challenge-history', [EventRegistrationController::class, 'memberChallengeHistory']);

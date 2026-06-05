@@ -14,6 +14,7 @@ use App\Services\WorkoutStatsService;
 use App\Support\SchemaCapabilities;
 use App\Support\WorkoutJsonPresenter;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Validator;
@@ -31,7 +32,7 @@ class SocialController extends Controller
         return WorkoutJsonPresenter::serializeForClientViewer($workout, $viewerId);
     }
 
-    private function mapClientSummary(Client $client, ?Client $viewer = null): array
+    private function mapClientSummary(Client $client, ?Client $viewer = null, ?bool $isFollowing = null): array
     {
         $profile = $client->profile;
         $displayName = $profile?->display_name
@@ -53,7 +54,7 @@ class SocialController extends Controller
         ];
 
         if ($viewer && $viewer->id !== $client->id) {
-            $mapped['is_following'] = $viewer->following()
+            $mapped['is_following'] = $isFollowing ?? $viewer->following()
                 ->where('clients.id', $client->id)
                 ->exists();
         }
@@ -61,7 +62,7 @@ class SocialController extends Controller
         return $mapped;
     }
 
-    private function getPublicProfilePayload(Client $target, Client $viewer): array
+    private function getPublicProfilePayload(Client $target, Client $viewer, bool $includeWorkoutStats = false): array
     {
         $profile = $target->profile;
         $goals = $target->goals()->select('id', 'name', 'slug')->orderBy('name')->get();
@@ -96,8 +97,17 @@ class SocialController extends Controller
 
         $workouts = WorkoutJsonPresenter::serializeManyForClientViewer($workoutRows, (string) $viewer->id);
 
-        return [
-            'user' => $this->mapClientSummary($target, $viewer),
+        $isFollowing = $viewer->id !== $target->id
+            && DB::table('client_follows')
+                ->where('follower_client_id', $viewer->id)
+                ->where('followed_client_id', $target->id)
+                ->exists();
+
+        $followingCount = (int) ($target->following_count ?? $target->following()->count());
+        $followersCount = (int) ($target->followers_count ?? $target->followers()->count());
+
+        $payload = [
+            'user' => $this->mapClientSummary($target, $viewer, $isFollowing),
             'profile' => [
                 'display_name' => $profile?->display_name,
                 'first_name' => $profile?->first_name,
@@ -127,18 +137,21 @@ class SocialController extends Controller
             'goals' => $goals,
             'social' => [
                 'is_self' => $viewer->id === $target->id,
-                'is_following' => $viewer->id === $target->id
-                    ? false
-                    : $viewer->following()->where('clients.id', $target->id)->exists(),
-                'following_count' => $target->following()->count(),
-                'followers_count' => $target->followers()->count(),
+                'is_following' => $isFollowing,
+                'following_count' => $followingCount,
+                'followers_count' => $followersCount,
                 'activities_count' => WorkoutLog::where('client_id', $target->id)
                     ->where('status', 'completed')
                     ->count(),
             ],
             'timeline' => $workouts,
-            'workout_stats' => $this->workoutStatsService->buildPayloadForClient((string) $target->id),
         ];
+
+        if ($includeWorkoutStats) {
+            $payload['workout_stats'] = $this->workoutStatsService->buildPayloadForClient((string) $target->id);
+        }
+
+        return $payload;
     }
 
     public function stats(Request $request)
@@ -173,7 +186,10 @@ class SocialController extends Controller
     public function userProfile(Request $request, string $clientId)
     {
         $viewer = $request->user();
-        $target = Client::with(['profile'])->find($clientId);
+        $target = Client::query()
+            ->with(['profile'])
+            ->withCount(['following', 'followers'])
+            ->find($clientId);
 
         if (!$target) {
             return response()->json([
@@ -182,9 +198,40 @@ class SocialController extends Controller
             ], 404);
         }
 
+        $includeWorkoutStats = $request->boolean('include_workout_stats', false);
+        $cacheKey = sprintf(
+            'social:profile:%s:viewer:%s:stats:%d:v1',
+            $clientId,
+            $viewer->id,
+            $includeWorkoutStats ? 1 : 0,
+        );
+
+        $payload = Cache::remember($cacheKey, 30, fn () => $this->getPublicProfilePayload(
+            $target,
+            $viewer,
+            $includeWorkoutStats,
+        ));
+
         return response()->json([
             'success' => true,
-            'data' => $this->getPublicProfilePayload($target, $viewer),
+            'data' => $payload,
+        ], 200);
+    }
+
+    public function userWorkoutStats(Request $request, string $clientId)
+    {
+        $target = Client::query()->find($clientId);
+
+        if (! $target) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not found.',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $this->workoutStatsService->buildPayloadForClient((string) $target->id),
         ], 200);
     }
 

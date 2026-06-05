@@ -38,28 +38,19 @@ class EventFinisherRankService
             return null;
         }
 
-        $regsQuery = $this->confirmedRegistrationQuery($eventId);
+        $rankedQuery = $this->confirmedRegistrationQuery($eventId);
         $this->leaderboardRanking->applyParticipationFilter(
-            $regsQuery,
+            $rankedQuery,
             $eventId,
             Schema::hasColumn('client_admin_event_registrations', 'progress_logged_km'),
         );
-        $regs = $regsQuery->get();
-        $finisherByClient = $this->leaderboardRanking->buildFinisherLookup($event, $regs);
 
-        $finisherIds = $regs
-            ->filter(fn (ClientAdminEventRegistration $reg) => $finisherByClient[(string) $reg->client_id] ?? false)
-            ->sort(function (ClientAdminEventRegistration $a, ClientAdminEventRegistration $b) use ($event, $finisherByClient) {
-                return $this->leaderboardRanking->compareRegistrations($event, $a, $b, $finisherByClient);
-            })
-            ->values()
-            ->pluck('client_id')
-            ->map(static fn ($id) => (string) $id)
-            ->all();
-
-        $position = array_search((string) $clientId, $finisherIds, true);
-
-        return $position === false ? null : $position + 1;
+        return $this->leaderboardRanking->rankForRegistration(
+            $event,
+            $rankedQuery,
+            $viewerReg,
+            true,
+        );
     }
 
     private function confirmedRegistrationQuery(string $eventId): Builder
