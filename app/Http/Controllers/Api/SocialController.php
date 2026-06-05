@@ -11,6 +11,7 @@ use App\Models\WorkoutLike;
 use App\Services\ClientNotificationService;
 use App\Services\Social\BuddyScoringService;
 use App\Services\WorkoutStatsService;
+use App\Support\SchemaCapabilities;
 use App\Support\WorkoutJsonPresenter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -80,20 +81,20 @@ class SocialController extends Controller
                 ->values()
                 ->all();
         }
-        $workouts = WorkoutLog::query()
+        $workoutRows = WorkoutLog::query()
             ->where('client_id', $target->id)
             ->where('status', 'completed')
             ->when(
-                Schema::hasColumn((new WorkoutLog)->getTable(), 'admin_event_id'),
+                SchemaCapabilities::hasWorkoutAdminEventId(),
                 fn ($q) => $q->with(['linkedAdminEvent:id,title']),
             )
             ->withCount(['likes', 'comments'])
             ->orderByDesc('workout_date')
             ->orderByDesc('created_at')
             ->limit(20)
-            ->get()
-            ->map(fn (WorkoutLog $workout) => $this->serializeWorkout($workout, $viewer->id))
-            ->values();
+            ->get();
+
+        $workouts = WorkoutJsonPresenter::serializeManyForClientViewer($workoutRows, (string) $viewer->id);
 
         return [
             'user' => $this->mapClientSummary($target, $viewer),

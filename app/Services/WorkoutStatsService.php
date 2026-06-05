@@ -8,6 +8,7 @@ use App\Models\ClientAdminEventRunningSelection;
 use App\Models\CommunityMember;
 use App\Models\WorkoutLog;
 use App\Support\PublicUploadStorage;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 
 class WorkoutStatsService
@@ -30,6 +31,11 @@ class WorkoutStatsService
      * Same shape as WorkoutController::stats "data" payload (no HTTP wrapper).
      */
     public function buildPayloadForClient(string $clientId): array
+    {
+        return Cache::remember("workout-stats:client:{$clientId}", 45, fn () => $this->buildPayloadForClientUncached($clientId));
+    }
+
+    private function buildPayloadForClientUncached(string $clientId): array
     {
         $weekStart = now()->startOfWeek()->toDateString();
         $weekEnd = now()->endOfWeek()->toDateString();
