@@ -6,6 +6,7 @@ use App\Models\AdminEvent;
 use App\Models\ClientAdminEventRegistration;
 use App\Models\ClientAdminEventRunningSelection;
 use App\Models\EventProgressSubmission;
+use App\Models\WorkoutLog;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
@@ -19,6 +20,87 @@ class EventLeaderboardRankingService
     public function completionColumnReady(): bool
     {
         return Schema::hasColumn('client_admin_event_registrations', 'progress_goal_completed_at');
+    }
+
+    /**
+     * Only registrants who logged workout progress (submitted or approved) appear on public rankings.
+     */
+    public function applyParticipationFilter(Builder $query, string $eventId, bool $progressReady): void
+    {
+        if (! $progressReady) {
+            $query->whereRaw('0 = 1');
+
+            return;
+        }
+
+        $query->where(function ($outer) use ($eventId) {
+            $outer->whereRaw('COALESCE(progress_logged_km, 0) > 0');
+
+            if (Schema::hasColumn('client_admin_event_registrations', 'progress_submission_status')) {
+                $outer->orWhere('progress_submission_status', 'pending_review');
+            }
+
+            if (EventProgressSubmissionService::tableReady()) {
+                $outer->orWhereExists(function ($sub) use ($eventId) {
+                    $sub->selectRaw('1')
+                        ->from('event_progress_submissions as eps')
+                        ->whereColumn('eps.client_id', 'client_admin_event_registrations.client_id')
+                        ->where('eps.admin_event_id', $eventId)
+                        ->whereIn('eps.status', [
+                            EventProgressSubmission::STATUS_PENDING,
+                            EventProgressSubmission::STATUS_APPROVED,
+                        ]);
+                });
+            } elseif (Schema::hasTable('workout_logs') && Schema::hasColumn('workout_logs', 'admin_event_id')) {
+                $outer->orWhereExists(function ($sub) use ($eventId) {
+                    $sub->selectRaw('1')
+                        ->from('workout_logs as wl')
+                        ->whereColumn('wl.client_id', 'client_admin_event_registrations.client_id')
+                        ->where('wl.admin_event_id', $eventId)
+                        ->where('wl.status', 'completed');
+                });
+            }
+        });
+    }
+
+    public function registrationQualifiesForLeaderboard(
+        ClientAdminEventRegistration $reg,
+        string $eventId,
+        bool $progressReady,
+    ): bool {
+        if (! $progressReady) {
+            return false;
+        }
+
+        if ((float) ($reg->progress_logged_km ?? 0) > 0) {
+            return true;
+        }
+
+        if (Schema::hasColumn($reg->getTable(), 'progress_submission_status')
+            && strtolower((string) ($reg->progress_submission_status ?? 'none')) === 'pending_review') {
+            return true;
+        }
+
+        if (EventProgressSubmissionService::tableReady()) {
+            return EventProgressSubmission::query()
+                ->where('client_id', $reg->client_id)
+                ->where('admin_event_id', $eventId)
+                ->whereIn('status', [
+                    EventProgressSubmission::STATUS_PENDING,
+                    EventProgressSubmission::STATUS_APPROVED,
+                ])
+                ->exists();
+        }
+
+        if (Schema::hasTable('workout_logs') && Schema::hasColumn('workout_logs', 'admin_event_id')) {
+            return WorkoutLog::query()
+                ->where('client_id', $reg->client_id)
+                ->where('admin_event_id', $eventId)
+                ->where('status', 'completed')
+                ->exists();
+        }
+
+        return false;
     }
 
     public function applySqlOrdering(Builder $query, bool $progressReady): void

@@ -38,7 +38,13 @@ class EventFinisherRankService
             return null;
         }
 
-        $regs = $this->confirmedRegistrationQuery($eventId)->get();
+        $regsQuery = $this->confirmedRegistrationQuery($eventId);
+        $this->leaderboardRanking->applyParticipationFilter(
+            $regsQuery,
+            $eventId,
+            Schema::hasColumn('client_admin_event_registrations', 'progress_logged_km'),
+        );
+        $regs = $regsQuery->get();
         $finisherByClient = $this->leaderboardRanking->buildFinisherLookup($event, $regs);
 
         $finisherIds = $regs

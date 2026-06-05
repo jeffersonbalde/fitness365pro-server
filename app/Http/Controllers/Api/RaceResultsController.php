@@ -119,10 +119,14 @@ class RaceResultsController extends Controller
         $progressReady = Schema::hasColumn('client_admin_event_registrations', 'progress_logged_km');
         $runningSelectionsReady = Schema::hasTable('client_admin_event_running_selections');
 
+        $rankingService = app(\App\Services\EventLeaderboardRankingService::class);
+
         $baseQuery = ClientAdminEventRegistration::query()
             ->where('admin_event_id', $event->id)
             ->when($registrationStatusTracked, fn ($q) => $q->where('registration_status', 'confirmed'))
             ->whereHas('client', fn ($q) => $q->whereNull('deleted_at'));
+
+        $rankingService->applyParticipationFilter($baseQuery, (string) $event->id, $progressReady);
 
         $listQuery = (clone $baseQuery)->with(['client.profile']);
 

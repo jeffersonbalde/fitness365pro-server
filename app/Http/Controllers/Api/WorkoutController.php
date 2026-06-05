@@ -122,6 +122,72 @@ class WorkoutController extends Controller
         \App\Support\PublicUploadStorage::deleteByUrl($url, ['workout-photos']);
     }
 
+    /**
+     * @return array{duration_seconds:int,duration_minutes:int}|null
+     */
+    private function resolveWorkoutDuration(Request $request, ?WorkoutLog $existingWorkout = null): ?array
+    {
+        $hasHmsParts = $request->exists('duration_hours')
+            || $request->exists('duration_minutes_part')
+            || $request->exists('duration_seconds_part');
+
+        if ($hasHmsParts) {
+            $hours = max(0, min(99, (int) $request->input('duration_hours', 0)));
+            $minutes = max(0, min(59, (int) $request->input('duration_minutes_part', 0)));
+            $seconds = max(0, min(59, (int) $request->input('duration_seconds_part', 0)));
+            $total = ($hours * 3600) + ($minutes * 60) + $seconds;
+
+            if ($total < 1) {
+                return null;
+            }
+
+            return [
+                'duration_seconds' => $total,
+                'duration_minutes' => max(1, intdiv($total, 60)),
+            ];
+        }
+
+        if ($request->filled('duration_seconds')) {
+            $total = (int) $request->input('duration_seconds');
+            if ($total < 1) {
+                return null;
+            }
+
+            return [
+                'duration_seconds' => $total,
+                'duration_minutes' => $request->filled('duration_minutes')
+                    ? max(1, (int) $request->input('duration_minutes'))
+                    : max(1, intdiv($total, 60)),
+            ];
+        }
+
+        if ($request->filled('duration_minutes')) {
+            $minutes = (int) $request->input('duration_minutes');
+            if ($minutes < 1) {
+                return null;
+            }
+
+            return [
+                'duration_seconds' => $minutes * 60,
+                'duration_minutes' => $minutes,
+            ];
+        }
+
+        if ($existingWorkout instanceof WorkoutLog) {
+            $existingSeconds = (int) ($existingWorkout->duration_seconds ?? 0);
+            $existingMinutes = (int) ($existingWorkout->duration_minutes ?? 0);
+
+            if ($existingSeconds > 0 || $existingMinutes > 0) {
+                return [
+                    'duration_seconds' => $existingSeconds > 0 ? $existingSeconds : ($existingMinutes * 60),
+                    'duration_minutes' => $existingMinutes > 0 ? $existingMinutes : max(1, intdiv($existingSeconds, 60)),
+                ];
+            }
+        }
+
+        return null;
+    }
+
     private function validateWorkout(Request $request, bool $isUpdate = false, ?WorkoutLog $existingWorkout = null)
     {
         $entryType = (string) $request->input('entry_type', $existingWorkout?->entry_type ?? 'workout');
@@ -131,9 +197,12 @@ class WorkoutController extends Controller
             'entry_type' => 'nullable|in:workout,post',
             'workout_type' => [$isPostEntry ? 'nullable' : 'required', 'string', 'max:100'],
             'workout_date' => 'nullable|date|before_or_equal:today',
-            'duration_minutes' => [$isPostEntry ? 'nullable' : 'required', 'integer', 'min:1'],
+            'duration_minutes' => [$isPostEntry ? 'nullable' : 'nullable', 'integer', 'min:1'],
             'distance_km' => [$isPostEntry ? 'nullable' : 'required', 'numeric', 'gt:0'],
             'duration_seconds' => 'nullable|integer|min:1',
+            'duration_hours' => 'nullable|integer|min:0|max:99',
+            'duration_minutes_part' => 'nullable|integer|min:0|max:59',
+            'duration_seconds_part' => 'nullable|integer|min:0|max:59',
             'status' => 'nullable|in:completed,skipped,partial',
             'notes' => 'nullable|string|max:1000',
             'caption' => 'nullable|string|max:2200',
@@ -169,6 +238,11 @@ class WorkoutController extends Controller
                 }
 
                 return;
+            }
+
+            $resolvedDuration = $this->resolveWorkoutDuration($request, $existingWorkout);
+            if ($resolvedDuration === null) {
+                $validator->errors()->add('duration', 'Duration is required and must be at least 1 second.');
             }
 
             if (! Schema::hasColumn('workout_logs', 'admin_event_id')) {
@@ -235,11 +309,13 @@ class WorkoutController extends Controller
         $entryType = (string) $request->input('entry_type', 'workout');
         $isPostEntry = $entryType === 'post';
 
+        $resolvedDuration = $isPostEntry ? null : $this->resolveWorkoutDuration($request);
+
         // Calculate pace if distance and time provided
         $pace = null;
-        if (!$isPostEntry && $request->filled('distance_km') && $request->filled('duration_seconds')) {
+        if (!$isPostEntry && $request->filled('distance_km') && is_array($resolvedDuration)) {
             $distance = (float) $request->input('distance_km');
-            $seconds = (int) $request->input('duration_seconds');
+            $seconds = (int) $resolvedDuration['duration_seconds'];
             if ($distance > 0 && $seconds > 0) {
                 $pace = ($seconds / 60) / $distance; // minutes per km
             }
@@ -268,9 +344,9 @@ class WorkoutController extends Controller
             'entry_type' => $entryType,
             'workout_date' => $request->input('workout_date', now()->toDateString()),
             'workout_type' => $isPostEntry ? 'Shared Post' : $request->input('workout_type'),
-            'duration_minutes' => $isPostEntry ? null : $request->input('duration_minutes'),
+            'duration_minutes' => $isPostEntry ? null : ($resolvedDuration['duration_minutes'] ?? null),
             'distance_km' => $isPostEntry ? null : $request->input('distance_km'),
-            'duration_seconds' => $isPostEntry ? null : $request->input('duration_seconds'),
+            'duration_seconds' => $isPostEntry ? null : ($resolvedDuration['duration_seconds'] ?? null),
             'pace_min_per_km' => $pace,
             'status' => $request->input('status', 'completed'),
             'caption' => $request->input('caption'),
@@ -329,8 +405,11 @@ class WorkoutController extends Controller
         $entryType = (string) $request->input('entry_type', $workout->entry_type ?? 'workout');
         $isPostEntry = $entryType === 'post';
 
+        $resolvedDuration = $isPostEntry ? null : $this->resolveWorkoutDuration($request, $workout);
         $distance = $request->has('distance_km') ? (float) $request->input('distance_km') : (float) ($workout->distance_km ?? 0);
-        $seconds = $request->has('duration_seconds') ? (int) $request->input('duration_seconds') : (int) ($workout->duration_seconds ?? 0);
+        $seconds = is_array($resolvedDuration)
+            ? (int) $resolvedDuration['duration_seconds']
+            : (int) ($workout->duration_seconds ?? 0);
         $pace = null;
         if (!$isPostEntry && $distance > 0 && $seconds > 0) {
             $pace = ($seconds / 60) / $distance;
@@ -392,9 +471,9 @@ class WorkoutController extends Controller
             'entry_type' => $entryType,
             'workout_date' => $request->input('workout_date', $fallbackWorkoutDate),
             'workout_type' => $request->input('workout_type', $isPostEntry ? 'Shared Post' : $workout->workout_type),
-            'duration_minutes' => $isPostEntry ? null : $request->input('duration_minutes', $workout->duration_minutes),
+            'duration_minutes' => $isPostEntry ? null : ($resolvedDuration['duration_minutes'] ?? $workout->duration_minutes),
             'distance_km' => $isPostEntry ? null : $request->input('distance_km', $workout->distance_km),
-            'duration_seconds' => $isPostEntry ? null : $request->input('duration_seconds', $workout->duration_seconds),
+            'duration_seconds' => $isPostEntry ? null : ($resolvedDuration['duration_seconds'] ?? $workout->duration_seconds),
             'pace_min_per_km' => $pace,
             'status' => $request->input('status', $workout->status),
             'caption' => $request->input('caption', $workout->caption),

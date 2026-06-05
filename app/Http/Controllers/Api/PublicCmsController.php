@@ -772,15 +772,22 @@ class PublicCmsController extends Controller
         $progressReady = Schema::hasColumn('client_admin_event_registrations', 'progress_logged_km');
         $runningSelectionsReady = Schema::hasTable('client_admin_event_running_selections');
 
+        $rankingService = app(\App\Services\EventLeaderboardRankingService::class);
+
         $baseQuery = ClientAdminEventRegistration::query()
             ->where('admin_event_id', $event->id)
             ->when($registrationStatusTracked, fn ($q) => $q->where('registration_status', 'confirmed'))
             ->whereHas('client', fn ($q) => $q->whereNull('deleted_at'));
 
         $participantsCount = (clone $baseQuery)->count();
+
+        $rankedQuery = clone $baseQuery;
+        $rankingService->applyParticipationFilter($rankedQuery, (string) $event->id, $progressReady);
+        $rankedParticipantsCount = (clone $rankedQuery)->count();
+
         $categories = $this->leaderboardCategoriesForEvent($event, $runningSelectionsReady);
 
-        $filteredQuery = clone $baseQuery;
+        $filteredQuery = clone $rankedQuery;
         $this->applyLeaderboardCategoryFilter($filteredQuery, $categoryFilter, (string) $event->id, $runningSelectionsReady);
 
         $totalInView = (clone $filteredQuery)->count();
@@ -826,8 +833,29 @@ class PublicCmsController extends Controller
 
         $includeViewerRank = $request->boolean('include_viewer_rank', true);
         $viewerRank = null;
-        if ($viewer && $includeViewerRank) {
-            $viewerReg = (clone $filteredQuery)
+        $viewerState = [
+            'registered' => false,
+            'visible_on_leaderboard' => false,
+        ];
+
+        if ($viewer) {
+            $viewerReg = (clone $baseQuery)
+                ->where('client_id', $viewer->id)
+                ->with(['client.profile'])
+                ->first();
+
+            if ($viewerReg) {
+                $viewerState['registered'] = true;
+                $viewerState['visible_on_leaderboard'] = $rankingService->registrationQualifiesForLeaderboard(
+                    $viewerReg,
+                    (string) $event->id,
+                    $progressReady,
+                );
+            }
+        }
+
+        if ($viewer && $includeViewerRank && ($viewerState['visible_on_leaderboard'] ?? false)) {
+            $viewerReg = (clone $baseQuery)
                 ->where('client_id', $viewer->id)
                 ->with(['client.profile'])
                 ->first();
@@ -867,6 +895,7 @@ class PublicCmsController extends Controller
                     'starts_at' => $event->starts_at?->toISOString(),
                     'ends_at' => $event->ends_at?->toISOString(),
                     'participants_count' => $participantsCount,
+                    'ranked_participants_count' => $rankedParticipantsCount,
                     'mileage_challenge_km' => Schema::hasColumn('admin_events', 'mileage_challenge_km')
                         && $event->mileage_challenge_km !== null
                         ? round((float) $event->mileage_challenge_km, 2)
@@ -875,6 +904,7 @@ class PublicCmsController extends Controller
                 'categories' => $categories,
                 'leaderboard' => $limitedEntries,
                 'viewer_rank' => $viewerRank,
+                'viewer_state' => $viewer ? $viewerState : null,
                 'total' => $totalInView,
             ],
         ]);

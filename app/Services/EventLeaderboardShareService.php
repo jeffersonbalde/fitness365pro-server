@@ -57,11 +57,18 @@ class EventLeaderboardShareService
 
         $categoryFilter = trim($categoryFilter) !== '' ? trim($categoryFilter) : 'all';
 
+        $rankingService = app(EventLeaderboardRankingService::class);
+
+        if (! $rankingService->registrationQualifiesForLeaderboard($reg, (string) $event->id, $progressReady)) {
+            return null;
+        }
+
         $filteredQuery = ClientAdminEventRegistration::query()
             ->where('admin_event_id', $event->id)
             ->when($registrationStatusTracked, fn ($q) => $q->where('registration_status', 'confirmed'))
             ->whereHas('client', fn ($q) => $q->whereNull('deleted_at'));
 
+        $rankingService->applyParticipationFilter($filteredQuery, (string) $event->id, $progressReady);
         $this->applyLeaderboardCategoryFilter($filteredQuery, $categoryFilter, (string) $event->id, $runningSelectionsReady);
 
         $rank = $this->viewerLeaderboardRank($filteredQuery, $reg, $progressReady, $event);
