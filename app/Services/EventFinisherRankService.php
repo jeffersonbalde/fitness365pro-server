@@ -38,12 +38,13 @@ class EventFinisherRankService
             return null;
         }
 
-        $finisherIds = $this->confirmedRegistrationQuery($eventId)
-            ->with(['event'])
-            ->get()
-            ->filter(fn (ClientAdminEventRegistration $reg) => $this->leaderboardRanking->registrationIsFinisher($event, $reg))
-            ->sort(function (ClientAdminEventRegistration $a, ClientAdminEventRegistration $b) use ($event) {
-                return $this->leaderboardRanking->compareRegistrations($event, $a, $b);
+        $regs = $this->confirmedRegistrationQuery($eventId)->get();
+        $finisherByClient = $this->leaderboardRanking->buildFinisherLookup($event, $regs);
+
+        $finisherIds = $regs
+            ->filter(fn (ClientAdminEventRegistration $reg) => $finisherByClient[(string) $reg->client_id] ?? false)
+            ->sort(function (ClientAdminEventRegistration $a, ClientAdminEventRegistration $b) use ($event, $finisherByClient) {
+                return $this->leaderboardRanking->compareRegistrations($event, $a, $b, $finisherByClient);
             })
             ->values()
             ->pluck('client_id')

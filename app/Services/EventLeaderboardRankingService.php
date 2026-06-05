@@ -6,7 +6,6 @@ use App\Models\AdminEvent;
 use App\Models\ClientAdminEventRegistration;
 use App\Models\ClientAdminEventRunningSelection;
 use App\Models\EventProgressSubmission;
-use App\Support\ViewerChallengeProgressPresenter;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
@@ -60,9 +59,30 @@ class EventLeaderboardRankingService
         }
 
         /** @var Collection<int, ClientAdminEventRegistration> $regs */
-        $regs = (clone $baseQuery)->get();
+        $regs = (clone $baseQuery)->get([
+            'id',
+            'client_id',
+            'admin_event_id',
+            'progress_logged_km',
+            'progress_goal_km',
+            'progress_pace_min_per_km',
+            'progress_goal_completed_at',
+            'updated_at',
+            'created_at',
+        ]);
+
+        if ($regs->isEmpty()) {
+            return 1;
+        }
+
+        $finisherByClient = $this->buildFinisherLookup($event, $regs);
         $sorted = $regs
-            ->sort(fn (ClientAdminEventRegistration $a, ClientAdminEventRegistration $b) => $this->compareRegistrations($event, $a, $b))
+            ->sort(fn (ClientAdminEventRegistration $a, ClientAdminEventRegistration $b) => $this->compareRegistrations(
+                $event,
+                $a,
+                $b,
+                $finisherByClient,
+            ))
             ->values();
 
         $position = $sorted->search(
@@ -72,13 +92,19 @@ class EventLeaderboardRankingService
         return $position === false ? $sorted->count() + 1 : $position + 1;
     }
 
+    /**
+     * @param  array<string, bool>|null  $finisherByClient
+     */
     public function compareRegistrations(
         AdminEvent $event,
         ClientAdminEventRegistration $a,
         ClientAdminEventRegistration $b,
+        ?array $finisherByClient = null,
     ): int {
-        $finA = $this->registrationIsFinisher($event, $a);
-        $finB = $this->registrationIsFinisher($event, $b);
+        $finA = $finisherByClient[(string) $a->client_id]
+            ?? $this->registrationIsFinisher($event, $a);
+        $finB = $finisherByClient[(string) $b->client_id]
+            ?? $this->registrationIsFinisher($event, $b);
 
         if ($finA !== $finB) {
             return $finB <=> $finA;
@@ -110,15 +136,23 @@ class EventLeaderboardRankingService
         return $updatedA <=> $updatedB;
     }
 
-    public function registrationIsFinisher(AdminEvent $event, ClientAdminEventRegistration $reg): bool
-    {
+    public function registrationIsFinisher(
+        AdminEvent $event,
+        ClientAdminEventRegistration $reg,
+        ?Collection $selectionsByClient = null,
+    ): bool {
         if ($this->completionColumnReady() && $reg->progress_goal_completed_at !== null) {
             return true;
         }
 
-        $slice = ViewerChallengeProgressPresenter::sliceReadOnly($event, $reg, (string) $reg->client_id);
+        $goal = $this->effectiveGoalKm($event, $reg, $selectionsByClient);
+        if ($goal === null || $goal <= 0) {
+            return false;
+        }
 
-        return ViewerChallengeProgressPresenter::distanceGoalIsSatisfied($slice);
+        $logged = (float) ($reg->progress_logged_km ?? 0);
+
+        return $logged + 1e-6 >= max(0.0, $goal - 0.08);
     }
 
     public function maybeRecordGoalCompletion(
@@ -152,12 +186,13 @@ class EventLeaderboardRankingService
     public function inferCompletionTimestamp(
         AdminEvent $event,
         ClientAdminEventRegistration $reg,
+        ?Collection $selectionsByClient = null,
     ): ?Carbon {
         if ($reg->progress_goal_completed_at !== null) {
             return $reg->progress_goal_completed_at;
         }
 
-        $goal = $this->effectiveGoalKm($event, $reg);
+        $goal = $this->effectiveGoalKm($event, $reg, $selectionsByClient);
         if ($goal === null || $goal <= 0) {
             return null;
         }
@@ -187,8 +222,11 @@ class EventLeaderboardRankingService
         return $reg->updated_at;
     }
 
-    public function effectiveGoalKm(AdminEvent $event, ClientAdminEventRegistration $reg): ?float
-    {
+    public function effectiveGoalKm(
+        AdminEvent $event,
+        ClientAdminEventRegistration $reg,
+        ?Collection $selectionsByClient = null,
+    ): ?float {
         $goal = $reg->progress_goal_km !== null ? (float) $reg->progress_goal_km : null;
 
         if (($goal === null || $goal <= 0.0)
@@ -199,29 +237,66 @@ class EventLeaderboardRankingService
         }
 
         if (($goal === null || $goal <= 0) && strtolower((string) $event->category) === 'running') {
-            if (Schema::hasTable('client_admin_event_running_selections')) {
+            $sel = null;
+            if ($selectionsByClient !== null) {
+                $sel = $selectionsByClient->get((string) $reg->client_id);
+            } elseif (Schema::hasTable('client_admin_event_running_selections')) {
                 $sel = ClientAdminEventRunningSelection::query()
                     ->where('admin_event_id', $event->id)
                     ->where('client_id', $reg->client_id)
                     ->first();
-                if ($sel) {
-                    $eventChallenge = Schema::hasColumn('admin_events', 'mileage_challenge_km')
-                        ? (float) ($event->mileage_challenge_km ?? 0)
-                        : 0.0;
-                    $dkm = EventEnrollmentProgressService::distanceKeyToKm(
-                        (string) $sel->distance_key,
-                        $sel->distance_label !== null ? (string) $sel->distance_label : null
-                    );
-                    if ($eventChallenge > 0) {
-                        $goal = $eventChallenge;
-                    } elseif ($dkm !== null && $dkm > 0) {
-                        $goal = $dkm;
-                    }
+            }
+
+            if ($sel) {
+                $eventChallenge = Schema::hasColumn('admin_events', 'mileage_challenge_km')
+                    ? (float) ($event->mileage_challenge_km ?? 0)
+                    : 0.0;
+                $dkm = EventEnrollmentProgressService::distanceKeyToKm(
+                    (string) $sel->distance_key,
+                    $sel->distance_label !== null ? (string) $sel->distance_label : null
+                );
+                if ($eventChallenge > 0) {
+                    $goal = $eventChallenge;
+                } elseif ($dkm !== null && $dkm > 0) {
+                    $goal = $dkm;
                 }
             }
         }
 
         return ($goal !== null && $goal > 0) ? $goal : null;
+    }
+
+    /**
+     * @param  Collection<int, ClientAdminEventRegistration>  $regs
+     * @return array<string, bool>
+     */
+    public function buildFinisherLookup(AdminEvent $event, Collection $regs): array
+    {
+        $selectionsByClient = $this->preloadRunningSelections($event, $regs);
+        $lookup = [];
+
+        foreach ($regs as $reg) {
+            $lookup[(string) $reg->client_id] = $this->registrationIsFinisher($event, $reg, $selectionsByClient);
+        }
+
+        return $lookup;
+    }
+
+    /**
+     * @param  Collection<int, ClientAdminEventRegistration>  $regs
+     * @return Collection<string, ClientAdminEventRunningSelection>
+     */
+    public function preloadRunningSelections(AdminEvent $event, Collection $regs): Collection
+    {
+        if (! Schema::hasTable('client_admin_event_running_selections') || $regs->isEmpty()) {
+            return collect();
+        }
+
+        return ClientAdminEventRunningSelection::query()
+            ->where('admin_event_id', $event->id)
+            ->whereIn('client_id', $regs->pluck('client_id'))
+            ->get()
+            ->keyBy(static fn ($row) => (string) $row->client_id);
     }
 
     private function completionSortKey(ClientAdminEventRegistration $reg): int
