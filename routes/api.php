@@ -57,6 +57,7 @@ Route::prefix('v1')->group(function () {
     Route::get('/public/badges/{clientId}/{eventId}/{badgeKey}', [BadgeShareController::class, 'show'])
         ->where('badgeKey', '.*');
     Route::get('/public/leaderboard/{eventId}/{clientId}', [LeaderboardShareController::class, 'show']);
+    Route::get('/cms/events/{id}/leaderboard', [PublicCmsController::class, 'eventLeaderboard']);
     Route::post('/paymaya/webhook', [MayaWebhookController::class, 'handle']);
 
     // Protected routes (require authentication)
@@ -154,7 +155,6 @@ Route::prefix('v1')->group(function () {
         Route::get('/cms/announcements', [PublicCmsController::class, 'announcements']);
         Route::get('/cms/events', [PublicCmsController::class, 'events']);
         Route::get('/cms/events/{id}', [PublicCmsController::class, 'eventShow']);
-        Route::get('/cms/events/{id}/leaderboard', [PublicCmsController::class, 'eventLeaderboard']);
         Route::get('/cms/events/{id}/registration', [EventRegistrationController::class, 'state']);
         Route::put('/cms/events/{id}/registration/participant', [EventRegistrationController::class, 'saveParticipant']);
         Route::put('/cms/events/{id}/registration/delivery', [EventRegistrationController::class, 'saveDelivery']);

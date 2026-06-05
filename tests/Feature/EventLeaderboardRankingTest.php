@@ -108,5 +108,7 @@ it('ranks finishers by goal completion time instead of total logged km', functio
 
     expect($ranking->rankForRegistration($event, $baseQuery, $maeReg, true))->toBe(1)
         ->and($ranking->rankForRegistration($event, $baseQuery, $salvadorReg, true))->toBe(2)
-        ->and($ranking->rankForRegistration($event, $baseQuery, $jojoReg, true))->toBe(3);
+        ->and($ranking->rankForRegistration($event, $baseQuery, $jojoReg, true))->toBe(3)
+        ->and($ranking->countRankedAhead($event, $baseQuery, $maeReg, true))->toBe(0)
+        ->and($ranking->countRankedAhead($event, $baseQuery, $salvadorReg, true))->toBe(1);
 });

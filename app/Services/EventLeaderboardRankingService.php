@@ -52,44 +52,166 @@ class EventLeaderboardRankingService
         ClientAdminEventRegistration $target,
         bool $progressReady,
     ): int {
+        return $this->countRankedAhead($event, $baseQuery, $target, $progressReady) + 1;
+    }
+
+    public function countRankedAhead(
+        AdminEvent $event,
+        Builder $baseQuery,
+        ClientAdminEventRegistration $target,
+        bool $progressReady,
+    ): int {
         if (! $progressReady) {
-            return 1 + (clone $baseQuery)
+            return (clone $baseQuery)
                 ->where('created_at', '>', $target->created_at)
                 ->count();
         }
 
-        /** @var Collection<int, ClientAdminEventRegistration> $regs */
-        $regs = (clone $baseQuery)->get([
-            'id',
-            'client_id',
-            'admin_event_id',
-            'progress_logged_km',
-            'progress_goal_km',
-            'progress_pace_min_per_km',
-            'progress_goal_completed_at',
-            'updated_at',
-            'created_at',
-        ]);
-
-        if ($regs->isEmpty()) {
-            return 1;
+        if ($this->completionColumnReady()) {
+            return $this->countRankedAheadWithCompletionColumn($baseQuery, $target);
         }
 
-        $finisherByClient = $this->buildFinisherLookup($event, $regs);
-        $sorted = $regs
-            ->sort(fn (ClientAdminEventRegistration $a, ClientAdminEventRegistration $b) => $this->compareRegistrations(
-                $event,
-                $a,
-                $b,
-                $finisherByClient,
-            ))
-            ->values();
+        return $this->countRankedAheadByLoggedProgress($baseQuery, $target);
+    }
 
-        $position = $sorted->search(
-            fn (ClientAdminEventRegistration $reg) => (string) $reg->client_id === (string) $target->client_id
-        );
+    private function countRankedAheadWithCompletionColumn(
+        Builder $baseQuery,
+        ClientAdminEventRegistration $target,
+    ): int {
+        $targetIsFinisher = $target->progress_goal_completed_at !== null;
+        $targetCompletedAt = $target->progress_goal_completed_at?->toDateTimeString();
+        $targetLogged = (float) ($target->progress_logged_km ?? 0);
+        $targetPace = $this->paceSortValue($target->progress_pace_min_per_km);
+        $targetUpdatedAt = $target->updated_at?->toDateTimeString();
+        $paceExpr = 'CASE WHEN progress_pace_min_per_km IS NULL OR progress_pace_min_per_km <= 0 THEN 999999 ELSE progress_pace_min_per_km END';
 
-        return $position === false ? $sorted->count() + 1 : $position + 1;
+        return (clone $baseQuery)
+            ->where('client_id', '!=', $target->client_id)
+            ->where(function ($query) use (
+                $targetIsFinisher,
+                $targetCompletedAt,
+                $targetLogged,
+                $targetPace,
+                $targetUpdatedAt,
+                $paceExpr,
+            ) {
+                if (! $targetIsFinisher) {
+                    $query->whereNotNull('progress_goal_completed_at')
+                        ->orWhere(function ($nonFinisher) use (
+                            $targetLogged,
+                            $targetPace,
+                            $targetUpdatedAt,
+                            $paceExpr,
+                        ) {
+                            $nonFinisher->whereNull('progress_goal_completed_at')
+                                ->where(function ($ahead) use (
+                                    $targetLogged,
+                                    $targetPace,
+                                    $targetUpdatedAt,
+                                    $paceExpr,
+                                ) {
+                                    $this->applyLoggedProgressAheadClause(
+                                        $ahead,
+                                        $targetLogged,
+                                        $targetPace,
+                                        $targetUpdatedAt,
+                                        $paceExpr,
+                                    );
+                                });
+                        });
+
+                    return;
+                }
+
+                $query->where(function ($finisher) use (
+                    $targetCompletedAt,
+                    $targetLogged,
+                    $targetPace,
+                    $targetUpdatedAt,
+                    $paceExpr,
+                ) {
+                    $finisher->whereNotNull('progress_goal_completed_at')
+                        ->where(function ($ahead) use (
+                            $targetCompletedAt,
+                            $targetLogged,
+                            $targetPace,
+                            $targetUpdatedAt,
+                            $paceExpr,
+                        ) {
+                            $ahead->where('progress_goal_completed_at', '<', $targetCompletedAt)
+                                ->orWhere(function ($sameCompletion) use (
+                                    $targetCompletedAt,
+                                    $targetLogged,
+                                    $targetPace,
+                                    $targetUpdatedAt,
+                                    $paceExpr,
+                                ) {
+                                    $sameCompletion
+                                        ->where('progress_goal_completed_at', '=', $targetCompletedAt)
+                                        ->where(function ($tie) use (
+                                            $targetLogged,
+                                            $targetPace,
+                                            $targetUpdatedAt,
+                                            $paceExpr,
+                                        ) {
+                                            $this->applyLoggedProgressAheadClause(
+                                                $tie,
+                                                $targetLogged,
+                                                $targetPace,
+                                                $targetUpdatedAt,
+                                                $paceExpr,
+                                            );
+                                        });
+                                });
+                        });
+                });
+            })
+            ->count();
+    }
+
+    private function countRankedAheadByLoggedProgress(
+        Builder $baseQuery,
+        ClientAdminEventRegistration $target,
+    ): int {
+        $targetLogged = (float) ($target->progress_logged_km ?? 0);
+        $targetPace = $this->paceSortValue($target->progress_pace_min_per_km);
+        $targetUpdatedAt = $target->updated_at?->toDateTimeString();
+        $paceExpr = 'CASE WHEN progress_pace_min_per_km IS NULL OR progress_pace_min_per_km <= 0 THEN 999999 ELSE progress_pace_min_per_km END';
+
+        return (clone $baseQuery)
+            ->where('client_id', '!=', $target->client_id)
+            ->where(function ($query) use ($targetLogged, $targetPace, $targetUpdatedAt, $paceExpr) {
+                $this->applyLoggedProgressAheadClause(
+                    $query,
+                    $targetLogged,
+                    $targetPace,
+                    $targetUpdatedAt,
+                    $paceExpr,
+                );
+            })
+            ->count();
+    }
+
+    private function applyLoggedProgressAheadClause(
+        $query,
+        float $targetLogged,
+        float $targetPace,
+        ?string $targetUpdatedAt,
+        string $paceExpr,
+    ): void {
+        $query->whereRaw('COALESCE(progress_logged_km, 0) > ?', [$targetLogged])
+            ->orWhere(function ($loggedTie) use ($targetLogged, $targetPace, $targetUpdatedAt, $paceExpr) {
+                $loggedTie->whereRaw('COALESCE(progress_logged_km, 0) = ?', [$targetLogged])
+                    ->where(function ($paceTie) use ($targetPace, $targetUpdatedAt, $paceExpr) {
+                        $paceTie->whereRaw("{$paceExpr} < ?", [$targetPace])
+                            ->orWhere(function ($updatedTie) use ($targetPace, $targetUpdatedAt, $paceExpr) {
+                                $updatedTie->whereRaw("{$paceExpr} = ?", [$targetPace]);
+                                if ($targetUpdatedAt !== null) {
+                                    $updatedTie->where('updated_at', '<', $targetUpdatedAt);
+                                }
+                            });
+                    });
+            });
     }
 
     /**

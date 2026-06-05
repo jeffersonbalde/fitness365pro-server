@@ -706,6 +706,7 @@ class PublicCmsController extends Controller
         $validator = Validator::make($request->all(), [
             'category' => 'nullable|string|max:120',
             'limit' => 'nullable|integer|min:1|max:100',
+            'include_viewer_rank' => 'nullable|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -766,7 +767,7 @@ class PublicCmsController extends Controller
 
         $categoryFilter = trim((string) $request->input('category', ''));
         $limit = min(100, max(1, (int) $request->input('limit', 50)));
-        $viewer = $request->user();
+        $viewer = \App\Support\OptionalSanctumUser::client($request);
         $registrationStatusTracked = Schema::hasColumn('client_admin_event_registrations', 'registration_status');
         $progressReady = Schema::hasColumn('client_admin_event_registrations', 'progress_logged_km');
         $runningSelectionsReady = Schema::hasTable('client_admin_event_running_selections');
@@ -823,8 +824,9 @@ class PublicCmsController extends Controller
             );
         })->filter()->values();
 
+        $includeViewerRank = $request->boolean('include_viewer_rank', true);
         $viewerRank = null;
-        if ($viewer) {
+        if ($viewer && $includeViewerRank) {
             $viewerReg = (clone $filteredQuery)
                 ->where('client_id', $viewer->id)
                 ->with(['client.profile'])
