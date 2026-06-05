@@ -58,8 +58,10 @@ it('renders an open graph share page for earned badges', function () {
         ->assertSee('10K Finisher', false)
         ->assertSee('Alex Runner', false)
         ->assertSee('og:image', false)
-        ->assertSee('/share/reward/', false)
-        ->assertSee('badge_1.', false);
+        ->assertSee('og:image:width', false)
+        ->assertSee('admin-event-badges/finisher.png', false)
+        ->assertDontSee('/share/reward/', false)
+        ->assertDontSee('.svg', false);
 });
 
 it('returns not found share page when badge is not earned', function () {

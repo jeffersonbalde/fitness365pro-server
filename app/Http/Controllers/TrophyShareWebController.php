@@ -52,7 +52,8 @@ class TrophyShareWebController extends Controller
             .rawurlencode($clientId).'/'
             .rawurlencode($eventId).'/'
             .rawurlencode((string) ($payload['trophy_key'] ?? $trophyKey));
-        $imageUrl = ShareOpenGraph::absoluteImageUrl((string) ($payload['image_url'] ?? ''));
+        $imageUrl = ShareOpenGraph::rewardOgImageUrl($payload);
+        $ogImageType = ShareOpenGraph::imageMimeTypeForUrl($imageUrl);
         $frontendBase = rtrim((string) config('app.frontend_url'), '/');
         $clientAppUrl = sprintf(
             '%s/profile/%s',
@@ -62,6 +63,10 @@ class TrophyShareWebController extends Controller
 
         return view('share.badge', [
             'pageTitle' => "{$trophyTitle} — {$displayName} | Fitness 365 Pro",
+            'ogTitle' => "{$trophyTitle} — {$displayName}",
+            'ogDescription' => $shareText,
+            'ogImageAlt' => "{$trophyTitle} trophy",
+            'ogImageType' => $ogImageType,
             'shareText' => $shareText,
             'badgeTitle' => $trophyTitle,
             'eventTitle' => $eventTitle,

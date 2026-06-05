@@ -56,7 +56,8 @@ class BadgeShareWebController extends Controller
             .rawurlencode($clientId).'/'
             .rawurlencode($eventId).'/'
             .rawurlencode((string) ($payload['badge_key'] ?? $badgeKey));
-        $imageUrl = ShareOpenGraph::absoluteImageUrl((string) ($payload['image_url'] ?? ''));
+        $imageUrl = ShareOpenGraph::rewardOgImageUrl($payload);
+        $ogImageType = ShareOpenGraph::imageMimeTypeForUrl($imageUrl);
         $frontendBase = rtrim((string) config('app.frontend_url'), '/');
         $clientAppUrl = sprintf(
             '%s/badge/%s/%s/%s',
@@ -68,6 +69,10 @@ class BadgeShareWebController extends Controller
 
         return view('share.badge', [
             'pageTitle' => "{$badgeTitle} — {$displayName} | Fitness 365 Pro",
+            'ogTitle' => "{$badgeTitle} — {$displayName}",
+            'ogDescription' => $shareText,
+            'ogImageAlt' => "{$badgeTitle} badge",
+            'ogImageType' => $ogImageType,
             'shareText' => $shareText,
             'badgeTitle' => $badgeTitle,
             'eventTitle' => $eventTitle,

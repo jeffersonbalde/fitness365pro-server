@@ -93,6 +93,41 @@ final class ShareOpenGraph
         return self::defaultImageUrl();
     }
 
+    /**
+     * Facebook/Twitter cannot use SVG or 302 redirects for og:image.
+     * Prefer direct CDN badge/trophy artwork; never point OG tags at /share/reward/*.svg.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    public static function rewardOgImageUrl(array $payload): string
+    {
+        $base = self::absoluteImageUrl((string) ($payload['base_image_url'] ?? ''));
+        if ($base !== self::defaultImageUrl()) {
+            return $base;
+        }
+
+        $dynamic = strtolower(trim((string) ($payload['image_url'] ?? '')));
+        if ($dynamic === '' || str_ends_with($dynamic, '.svg')) {
+            return self::defaultImageUrl();
+        }
+
+        return self::absoluteSharePath((string) ($payload['image_url'] ?? ''));
+    }
+
+    public static function absoluteSharePath(string $path): string
+    {
+        $path = trim($path);
+        if ($path === '') {
+            return self::defaultImageUrl();
+        }
+
+        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
+            return self::ensureHttps($path);
+        }
+
+        return self::shareOrigin().'/'.ltrim($path, '/');
+    }
+
     public static function imageMimeTypeForUrl(string $url): string
     {
         $path = strtolower((string) parse_url($url, PHP_URL_PATH));
