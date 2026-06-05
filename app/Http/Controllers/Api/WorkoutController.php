@@ -77,8 +77,12 @@ class WorkoutController extends Controller
         return WorkoutJsonPresenter::serializeManyForClientViewer($workouts, $viewerId);
     }
 
-    private function serializeComment(WorkoutComment $comment, string $viewerId, bool $includeReplies = true): array
-    {
+    private function serializeComment(
+        WorkoutComment $comment,
+        string $viewerId,
+        bool $includeReplies = true,
+        ?array $likedCommentIds = null,
+    ): array {
         $mapped = [
             'id' => $comment->id,
             'workout_log_id' => $comment->workout_log_id,
@@ -88,18 +92,41 @@ class WorkoutController extends Controller
             'updated_at' => $comment->updated_at,
             'author' => $this->mapClientSummary($comment->client),
             'likes_count' => (int) ($comment->likes_count ?? 0),
-            'is_liked_by_me' => WorkoutCommentLike::where('workout_comment_id', $comment->id)
-                ->where('client_id', $viewerId)
-                ->exists(),
+            'is_liked_by_me' => isset($likedCommentIds[(string) $comment->id]),
         ];
 
         if ($includeReplies) {
             $mapped['replies'] = $comment->replies
-                ->map(fn (WorkoutComment $reply) => $this->serializeComment($reply, $viewerId, false))
+                ->map(fn (WorkoutComment $reply) => $this->serializeComment($reply, $viewerId, false, $likedCommentIds))
                 ->values();
         }
 
         return $mapped;
+    }
+
+    /**
+     * @return array<string, true>
+     */
+    private function likedCommentIdSetForViewer(string $viewerId, $comments): array
+    {
+        $ids = [];
+        foreach ($comments as $comment) {
+            $ids[] = (string) $comment->id;
+            foreach ($comment->replies ?? [] as $reply) {
+                $ids[] = (string) $reply->id;
+            }
+        }
+
+        if ($ids === []) {
+            return [];
+        }
+
+        return WorkoutCommentLike::query()
+            ->where('client_id', $viewerId)
+            ->whereIn('workout_comment_id', $ids)
+            ->pluck('workout_comment_id')
+            ->mapWithKeys(static fn ($id) => [(string) $id => true])
+            ->all();
     }
 
     private function parseImageListInput(Request $request, string $key): array
@@ -569,10 +596,7 @@ class WorkoutController extends Controller
             ->orderBy('workout_date', 'desc')
             ->orderBy('created_at', 'desc');
 
-        // Optional filters
-        if ($request->has('limit')) {
-            $query->limit((int) $request->input('limit', 10));
-        }
+        $query->limit(min(100, max(1, (int) $request->input('limit', 50))));
 
         if ($request->has('date_from')) {
             $query->where('workout_date', '>=', $request->input('date_from'));
@@ -582,15 +606,13 @@ class WorkoutController extends Controller
             $query->where('workout_date', '<=', $request->input('date_to'));
         }
 
-        $workouts = $query->get()->map(
-            fn (WorkoutLog $workout) => $this->serializeWorkout($workout, $client->id)
-        )->values();
+        $rows = $query->get();
 
         return response()->json([
             'success' => true,
             'data' => [
-                'workouts' => $workouts,
-                'total' => $workouts->count(),
+                'workouts' => $this->serializeWorkouts($rows, $client->id),
+                'total' => $rows->count(),
             ],
         ], 200);
     }
@@ -914,7 +936,7 @@ class WorkoutController extends Controller
             ], 404);
         }
 
-        $comments = WorkoutComment::query()
+        $commentRows = WorkoutComment::query()
             ->where('workout_log_id', $workout->id)
             ->whereNull('parent_comment_id')
             ->withCount('likes')
@@ -923,8 +945,12 @@ class WorkoutController extends Controller
                 'replies' => fn ($query) => $query->withCount('likes')->with('client.profile'),
             ])
             ->orderBy('created_at')
-            ->get()
-            ->map(fn (WorkoutComment $comment) => $this->serializeComment($comment, $viewer->id))
+            ->get();
+
+        $likedCommentIds = $this->likedCommentIdSetForViewer((string) $viewer->id, $commentRows);
+
+        $comments = $commentRows
+            ->map(fn (WorkoutComment $comment) => $this->serializeComment($comment, $viewer->id, true, $likedCommentIds))
             ->values();
 
         return response()->json([

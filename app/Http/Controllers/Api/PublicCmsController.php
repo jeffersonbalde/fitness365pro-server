@@ -286,7 +286,7 @@ class PublicCmsController extends Controller
         $goal = $reg->progress_goal_km !== null ? (float) $reg->progress_goal_km : null;
 
         if (($goal === null || $goal <= 0.0)
-            && Schema::hasColumn('admin_events', 'mileage_challenge_km')
+            && \App\Support\SchemaCapabilities::hasAdminEventsMileageChallenge()
             && $event->mileage_challenge_km !== null
             && (float) $event->mileage_challenge_km > 0.0) {
             $goal = (float) $event->mileage_challenge_km;
@@ -316,7 +316,7 @@ class PublicCmsController extends Controller
                 'logged_distance_km' => $logged,
                 'goal_distance_km' => $goal,
                 'progress_percent' => $percent,
-                'mileage_challenge_km' => Schema::hasColumn('admin_events', 'mileage_challenge_km')
+                'mileage_challenge_km' => \App\Support\SchemaCapabilities::hasAdminEventsMileageChallenge()
                     ? ($event->mileage_challenge_km !== null ? (float) $event->mileage_challenge_km : null)
                     : null,
             ]),
@@ -325,15 +325,17 @@ class PublicCmsController extends Controller
 
     public function feed()
     {
-        if (!Schema::hasTable('admin_posts')) {
+        if (! \App\Support\SchemaCapabilities::hasAdminPostsTable()) {
             return response()->json([
                 'success' => true,
                 'data' => ['posts' => [], 'total' => 0],
             ]);
         }
-        $now = now('UTC');
 
-        $posts = AdminPost::query()
+        $payload = Cache::remember('cms:feed:public:v1', 60, function () {
+            $now = now('UTC');
+
+            return AdminPost::query()
             ->with('admin:id,name,email')
             ->where('status', 'published')
             ->where(function ($query) use ($now) {
@@ -360,13 +362,15 @@ class PublicCmsController extends Controller
                     ],
                 ];
             })
-            ->values();
+            ->values()
+            ->all();
+        });
 
         return response()->json([
             'success' => true,
             'data' => [
-                'posts' => $posts,
-                'total' => $posts->count(),
+                'posts' => $payload,
+                'total' => count($payload),
             ],
         ]);
     }
@@ -837,6 +841,7 @@ class PublicCmsController extends Controller
             'registered' => false,
             'visible_on_leaderboard' => false,
         ];
+        $viewerReg = null;
 
         if ($viewer) {
             $viewerReg = (clone $baseQuery)
@@ -854,33 +859,26 @@ class PublicCmsController extends Controller
             }
         }
 
-        if ($viewer && $includeViewerRank && ($viewerState['visible_on_leaderboard'] ?? false)) {
-            $viewerReg = (clone $baseQuery)
-                ->where('client_id', $viewer->id)
-                ->with(['client.profile'])
-                ->first();
-
-            if ($viewerReg) {
-                $viewerRankNum = $this->viewerLeaderboardRank($filteredQuery, $viewerReg, $progressReady, $event);
-                $viewerSelections = collect();
-                if ($runningSelectionsReady) {
-                    $viewerSelections = ClientAdminEventRunningSelection::query()
-                        ->where('admin_event_id', $event->id)
-                        ->where('client_id', $viewer->id)
-                        ->get()
-                        ->keyBy(static fn ($row) => (string) $row->client_id);
-                }
-                $viewerFollowing = $this->followingIdSetForViewer($viewer, [(string) $viewer->id]);
-                $viewerRank = $this->buildLeaderboardEntry(
-                    $viewerReg,
-                    $viewerRankNum,
-                    $event,
-                    $viewer,
-                    $progressReady,
-                    $viewerSelections,
-                    $viewerFollowing,
-                );
+        if ($viewer && $includeViewerRank && $viewerReg && ($viewerState['visible_on_leaderboard'] ?? false)) {
+            $viewerRankNum = $this->viewerLeaderboardRank($filteredQuery, $viewerReg, $progressReady, $event);
+            $viewerSelections = collect();
+            if ($runningSelectionsReady) {
+                $viewerSelections = ClientAdminEventRunningSelection::query()
+                    ->where('admin_event_id', $event->id)
+                    ->where('client_id', $viewer->id)
+                    ->get()
+                    ->keyBy(static fn ($row) => (string) $row->client_id);
             }
+            $viewerFollowing = $this->followingIdSetForViewer($viewer, [(string) $viewer->id]);
+            $viewerRank = $this->buildLeaderboardEntry(
+                $viewerReg,
+                $viewerRankNum,
+                $event,
+                $viewer,
+                $progressReady,
+                $viewerSelections,
+                $viewerFollowing,
+            );
         }
 
         return response()->json([
