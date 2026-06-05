@@ -29,6 +29,7 @@ class ClientAdminEventRegistration extends Model
         'progress_target_label',
         'progress_pace_min_per_km',
         'progress_submission_status',
+        'progress_goal_completed_at',
         'payment_method',
         'registered_by_admin_id',
         'manual_payment_reference',
@@ -45,6 +46,7 @@ class ClientAdminEventRegistration extends Model
         'participant_details' => 'array',
         'delivery_details' => 'array',
         'paid_at' => 'datetime',
+        'progress_goal_completed_at' => 'datetime',
     ];
 
     public function client(): BelongsTo

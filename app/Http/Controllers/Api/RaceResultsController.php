@@ -126,14 +126,7 @@ class RaceResultsController extends Controller
 
         $listQuery = (clone $baseQuery)->with(['client.profile']);
 
-        if ($progressReady) {
-            $listQuery
-                ->orderByRaw('COALESCE(progress_logged_km, 0) DESC')
-                ->orderByRaw('CASE WHEN progress_pace_min_per_km IS NULL OR progress_pace_min_per_km <= 0 THEN 999999 ELSE progress_pace_min_per_km END ASC')
-                ->orderBy('updated_at');
-        } else {
-            $listQuery->orderByDesc('created_at');
-        }
+        app(\App\Services\EventLeaderboardRankingService::class)->applySqlOrdering($listQuery, $progressReady);
 
         /** @var \Illuminate\Database\Eloquent\Collection<int, ClientAdminEventRegistration> $allRegs */
         $allRegs = $listQuery->get();

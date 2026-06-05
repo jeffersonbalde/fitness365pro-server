@@ -255,6 +255,9 @@ class EventProgressSubmissionService
         $submission->review_note = null;
         $submission->save();
 
+        $reg->refresh();
+        app(EventLeaderboardRankingService::class)->maybeRecordGoalCompletion($reg, $submission->reviewed_at);
+
         static::refreshRegistrationSubmissionStatus((string) $submission->client_id, (string) $submission->admin_event_id);
 
         $submission->loadMissing('event');

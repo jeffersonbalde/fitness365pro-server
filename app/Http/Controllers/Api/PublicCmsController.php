@@ -144,14 +144,7 @@ class PublicCmsController extends Controller
 
     private function applyLeaderboardOrdering($query, bool $progressReady): void
     {
-        if ($progressReady) {
-            $query
-                ->orderByRaw('COALESCE(progress_logged_km, 0) DESC')
-                ->orderByRaw('CASE WHEN progress_pace_min_per_km IS NULL OR progress_pace_min_per_km <= 0 THEN 999999 ELSE progress_pace_min_per_km END ASC')
-                ->orderBy('updated_at');
-        } else {
-            $query->orderByDesc('created_at');
-        }
+        app(\App\Services\EventLeaderboardRankingService::class)->applySqlOrdering($query, $progressReady);
     }
 
     /**
@@ -278,36 +271,10 @@ class PublicCmsController extends Controller
         $baseQuery,
         ClientAdminEventRegistration $viewerReg,
         bool $progressReady,
+        AdminEvent $event,
     ): int {
-        if (! $progressReady) {
-            return 1 + (clone $baseQuery)
-                ->where('created_at', '>', $viewerReg->created_at)
-                ->count();
-        }
-
-        $logged = (float) ($viewerReg->progress_logged_km ?? 0);
-        $pace = $viewerReg->progress_pace_min_per_km;
-        $paceSort = ($pace === null || (float) $pace <= 0) ? 999999 : (float) $pace;
-
-        $better = (clone $baseQuery)->where(function ($q) use ($logged, $paceSort, $viewerReg) {
-            $q->whereRaw('COALESCE(progress_logged_km, 0) > ?', [$logged])
-                ->orWhere(function ($inner) use ($logged, $paceSort, $viewerReg) {
-                    $inner->whereRaw('COALESCE(progress_logged_km, 0) = ?', [$logged])
-                        ->where(function ($paceQ) use ($paceSort, $viewerReg) {
-                            $paceQ->whereRaw(
-                                'CASE WHEN progress_pace_min_per_km IS NULL OR progress_pace_min_per_km <= 0 THEN 999999 ELSE progress_pace_min_per_km END < ?',
-                                [$paceSort]
-                            )->orWhere(function ($tieQ) use ($paceSort, $viewerReg) {
-                                $tieQ->whereRaw(
-                                    'CASE WHEN progress_pace_min_per_km IS NULL OR progress_pace_min_per_km <= 0 THEN 999999 ELSE progress_pace_min_per_km END = ?',
-                                    [$paceSort]
-                                )->where('updated_at', '<', $viewerReg->updated_at);
-                            });
-                        });
-                });
-        })->count();
-
-        return $better + 1;
+        return app(\App\Services\EventLeaderboardRankingService::class)
+            ->rankForRegistration($event, $baseQuery, $viewerReg, $progressReady);
     }
 
     /**
@@ -864,7 +831,7 @@ class PublicCmsController extends Controller
                 ->first();
 
             if ($viewerReg) {
-                $viewerRankNum = $this->viewerLeaderboardRank($filteredQuery, $viewerReg, $progressReady);
+                $viewerRankNum = $this->viewerLeaderboardRank($filteredQuery, $viewerReg, $progressReady, $event);
                 $viewerSelections = collect();
                 if ($runningSelectionsReady) {
                     $viewerSelections = ClientAdminEventRunningSelection::query()

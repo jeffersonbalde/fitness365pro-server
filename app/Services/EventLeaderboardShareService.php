@@ -64,7 +64,7 @@ class EventLeaderboardShareService
 
         $this->applyLeaderboardCategoryFilter($filteredQuery, $categoryFilter, (string) $event->id, $runningSelectionsReady);
 
-        $rank = $this->viewerLeaderboardRank($filteredQuery, $reg, $progressReady);
+        $rank = $this->viewerLeaderboardRank($filteredQuery, $reg, $progressReady, $event);
 
         $selections = collect();
         if ($runningSelectionsReady) {
@@ -152,14 +152,7 @@ class EventLeaderboardShareService
 
     private function applyLeaderboardOrdering($query, bool $progressReady): void
     {
-        if ($progressReady) {
-            $query
-                ->orderByRaw('COALESCE(progress_logged_km, 0) DESC')
-                ->orderByRaw('CASE WHEN progress_pace_min_per_km IS NULL OR progress_pace_min_per_km <= 0 THEN 999999 ELSE progress_pace_min_per_km END ASC')
-                ->orderBy('updated_at');
-        } else {
-            $query->orderByDesc('created_at');
-        }
+        app(EventLeaderboardRankingService::class)->applySqlOrdering($query, $progressReady);
     }
 
     private function applyLeaderboardCategoryFilter(
@@ -192,36 +185,10 @@ class EventLeaderboardShareService
         $baseQuery,
         ClientAdminEventRegistration $viewerReg,
         bool $progressReady,
+        AdminEvent $event,
     ): int {
-        if (! $progressReady) {
-            return 1 + (clone $baseQuery)
-                ->where('created_at', '>', $viewerReg->created_at)
-                ->count();
-        }
-
-        $logged = (float) ($viewerReg->progress_logged_km ?? 0);
-        $pace = $viewerReg->progress_pace_min_per_km;
-        $paceSort = ($pace === null || (float) $pace <= 0) ? 999999 : (float) $pace;
-
-        $better = (clone $baseQuery)->where(function ($q) use ($logged, $paceSort, $viewerReg) {
-            $q->whereRaw('COALESCE(progress_logged_km, 0) > ?', [$logged])
-                ->orWhere(function ($inner) use ($logged, $paceSort, $viewerReg) {
-                    $inner->whereRaw('COALESCE(progress_logged_km, 0) = ?', [$logged])
-                        ->where(function ($paceQ) use ($paceSort, $viewerReg) {
-                            $paceQ->whereRaw(
-                                'CASE WHEN progress_pace_min_per_km IS NULL OR progress_pace_min_per_km <= 0 THEN 999999 ELSE progress_pace_min_per_km END < ?',
-                                [$paceSort]
-                            )->orWhere(function ($tieQ) use ($paceSort, $viewerReg) {
-                                $tieQ->whereRaw(
-                                    'CASE WHEN progress_pace_min_per_km IS NULL OR progress_pace_min_per_km <= 0 THEN 999999 ELSE progress_pace_min_per_km END = ?',
-                                    [$paceSort]
-                                )->where('updated_at', '<', $viewerReg->updated_at);
-                            });
-                        });
-                });
-        })->count();
-
-        return $better + 1;
+        return app(EventLeaderboardRankingService::class)
+            ->rankForRegistration($event, $baseQuery, $viewerReg, $progressReady);
     }
 
     /**
